@@ -1,0 +1,14 @@
+[
+  {
+    "question": "什么是 RAG 中的 Chunking？为什么要进行 Chunking？",
+    "expected_answer": "Chunking 是将长文本切分成更小片段（块）的过程。因为大模型有上下文窗口限制，且嵌入模型（Embedding）处理短文本的语义捕捉更精准。常见策略包括按长度切分、按段落切分以及带有 Overlap（重叠度）的滑动窗口切分。"
+  },
+  {
+    "question": "在 Agent 架构中，ReAct 模式的核心思想是什么？",
+    "expected_answer": "ReAct (Reason + Act) 是一种让大模型交替进行『思考』和『行动』的范式。核心思想是强制模型在调用外部工具（Act）之前，先输出一段内部的推理过程（Thought/Reason），根据工具返回的观察结果（Observation）再决定下一步行动，从而提升解决复杂任务的可靠性。"
+  },
+  {
+    "question": "请解释一下大模型幻觉（Hallucination），在 RAG 中如何缓解？",
+    "expected_answer": "大模型幻觉是指模型生成了看似合理但实际错误或无中生有的内容。在 RAG 中，主要通过以下方式缓解：1. 强制 Prompt 约束（如'只能根据以下参考资料回答'）；2. 提供高质量的检索上下文；3. 当检索不到资料时配置兜底逻辑（Fallback），让模型诚实回答'不知道'。"
+  }
+]
