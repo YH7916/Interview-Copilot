@@ -126,6 +126,12 @@ class AgentLoop:
         self.tools.register(WebFetchTool(proxy=self.web_proxy))
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))
+        
+        # Import and register custom tools locally to avoid circular dependencies
+        from nanobot.skills.interview_rag.tools import SearchConceptTool, SearchCompanyQuestionsTool
+        self.tools.register(SearchConceptTool())
+        self.tools.register(SearchCompanyQuestionsTool())
+        
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
 

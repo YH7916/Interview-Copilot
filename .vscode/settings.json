@@ -1,0 +1,7 @@
+{
+    "python.defaultInterpreterPath": "D:\\Projects\\Interview-Copilot\\.venv\\Scripts\\python.exe",
+    "python.analysis.extraPaths": [
+        ".",
+        "./.venv/Lib/site-packages"
+    ]
+}
