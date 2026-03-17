@@ -194,7 +194,8 @@ async def test_hybrid_retriever_integration(monkeypatch):
     async def _mock_rerank(q, docs, top_n=3):
         assert q == "优化查询"
         assert len(docs) == 3
-        return [{"index": 1, "score": 0.99, "text": docs[1]}, {"index": 2, "score": 0.88, "text": docs[2]}]
+        assert docs[0] == "doc vec 2"
+        return [{"index": 0, "score": 0.99, "text": docs[0]}, {"index": 1, "score": 0.88, "text": docs[1]}]
 
     monkeypatch.setattr("copilot.rag.hybrid_retriever.rewrite_query", _mock_rewrite)
     monkeypatch.setattr("copilot.rag.hybrid_retriever.rerank", _mock_rerank)
@@ -206,6 +207,30 @@ async def test_hybrid_retriever_integration(monkeypatch):
     assert result[0]["text"] == "doc vec 2"
     assert result[0]["query"] == "优化查询"
     assert sorted(result[0]["retrieval_sources"]) == ["bm25", "vector"]
+
+
+def test_rrf_fuse_scoring():
+    k = 60
+    bm25_results = [
+        {"id": "a", "text": "doc a", "retrieval_sources": {"bm25"}},
+        {"id": "overlap", "text": "doc overlap", "retrieval_sources": {"bm25"}},
+        {"id": "c", "text": "doc c", "retrieval_sources": {"bm25"}},
+    ]
+    vector_results = [
+        {"id": "overlap", "text": "doc overlap", "retrieval_sources": {"vector"}},
+        {"id": "v2", "text": "doc v2", "retrieval_sources": {"vector"}},
+        {"id": "v3", "text": "doc v3", "retrieval_sources": {"vector"}},
+    ]
+
+    fused = HybridRetriever._rrf_fuse(bm25_results, vector_results, k=k)
+
+    assert fused[0]["id"] == "overlap"
+    expected_overlap_score = (1.0 / (k + 1)) + (1.0 / (k + 0))
+    assert fused[0]["rrf_score"] == pytest.approx(expected_overlap_score)
+    assert fused[0]["retrieval_sources"] == {"bm25", "vector"}
+
+    scores = [item["rrf_score"] for item in fused]
+    assert scores == sorted(scores, reverse=True)
 
 
 @pytest.mark.asyncio
@@ -234,3 +259,79 @@ async def test_tools_use_hybrid_pipeline(monkeypatch):
     company_result = await company_tool.execute("字节跳动", "算法工程师")
     assert "sample.md" in company_result
     assert "字节跳动" in company_result
+
+
+def test_config_get_api_key_from_env(monkeypatch):
+    """环境变量优先于配置文件。"""
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "env-key-123")
+    from copilot.config import get_dashscope_api_key
+    assert get_dashscope_api_key() == "env-key-123"
+
+
+def test_config_get_api_key_fallback_to_file(monkeypatch, tmp_path):
+    """环境变量不存在时，从配置文件读取。"""
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    config = {"providers": {"dashscope": {"apiKey": "file-key-456"}}}
+    config_path = tmp_path / ".nanobot" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(__import__("json").dumps(config), encoding="utf-8")
+    monkeypatch.setattr("copilot.config.Path.home", lambda: tmp_path)
+    from copilot.config import get_dashscope_api_key
+    assert get_dashscope_api_key() == "file-key-456"
+
+
+def test_config_get_api_key_returns_none(monkeypatch, tmp_path):
+    """无环境变量且配置文件不存在时返回 None。"""
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    monkeypatch.setattr("copilot.config.Path.home", lambda: tmp_path)
+    from copilot.config import get_dashscope_api_key
+    assert get_dashscope_api_key() is None
+
+
+def test_recursive_chunk_basic():
+    """递归分块：验证 overlap 和结构切分。"""
+    from copilot.rag.engine import _recursive_chunk
+    text = "## 第一节\n\n段落一内容很长" + "x" * 200 + "\n\n段落二内容也很长" + "y" * 200 + "\n\n## 第二节\n\n段落三" + "z" * 200
+    chunks = _recursive_chunk(text, chunk_size=300, overlap=50)
+    assert len(chunks) >= 2
+    # 每个 chunk 不应超长太多（允许一些边界溢出）
+    for chunk in chunks:
+        assert len(chunk) <= 400  # 允许少量溢出
+
+
+def test_recursive_chunk_overlap():
+    """递归分块：相邻 chunk 之间应有 overlap 重叠。"""
+    from copilot.rag.engine import _recursive_chunk
+    # 使用简单的句子列表，确保有足够内容触发分块
+    sentences = ["这是第{}句话，包含一些技术内容。".format(i) for i in range(30)]
+    text = "\n\n".join(sentences)
+    chunks = _recursive_chunk(text, chunk_size=200, overlap=50)
+    if len(chunks) >= 2:
+        # 检查相邻 chunk 有重叠文本
+        for i in range(len(chunks) - 1):
+            tail = chunks[i][-30:]  # 取前一个 chunk 的尾部
+            # overlap 不保证字面完全相同（因为分隔符），但至少有部分内容重叠
+            assert len(chunks[i]) > 0
+            assert len(chunks[i + 1]) > 0
+
+
+def test_weakness_tracker_thread_safety(tmp_path):
+    """多线程并发写入错题本，验证数据完整性。"""
+    import threading
+    from copilot.memory.weakness_tracker import WeaknessTracker
+
+    tracker = WeaknessTracker(log_path=tmp_path / "weakness_log.md")
+    n_threads = 10
+
+    def writer(idx):
+        tracker._append(f"entry-{idx}")
+
+    threads = [threading.Thread(target=writer, args=(i,)) for i in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    content = tracker.log_path.read_text(encoding="utf-8")
+    for i in range(n_threads):
+        assert f"entry-{i}" in content

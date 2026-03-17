@@ -9,6 +9,10 @@ from __future__ import annotations
 from collections import deque
 from typing import NamedTuple
 
+import tiktoken
+
+_enc = tiktoken.get_encoding("cl100k_base")
+
 
 class Turn(NamedTuple):
     user: str
@@ -71,9 +75,6 @@ class TokenWindowManager:
 
     def _count_tokens(self) -> int:
         """
-        粗略估算 Token 数量。
-        原则：中文环境通常 1 个 Token 对应 1.5 到 2 个字符，英文 4 字符。
-        为了轻量性不引入 tiktoken 库，这里采用保守算法：4 字符 ≈ 1 Token。
+        使用 tiktoken cl100k_base 统计 Token 数量。
         """
-        total = sum(len(t.user) + len(t.assistant) for t in self._window)
-        return total // 4
+        return sum(len(_enc.encode(t.user)) + len(_enc.encode(t.assistant)) for t in self._window)

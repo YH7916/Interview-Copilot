@@ -5,10 +5,12 @@ LLMOps 自动化评测流水线 (LLM-as-a-Judge)
   2. Qwen 基于检索结果生成回答 (Generator)
   3. Qwen 作为严苛裁判对回答打分 (Judge)
 """
-import os
+import asyncio
 import json
 import sys
 from pathlib import Path
+
+from copilot.rag.hybrid_retriever import HybridRetriever
 
 # 确保项目根目录在 Python PATH 内，copilot/ 包才能正常导入
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -16,6 +18,7 @@ sys.path.insert(0, str(BASE_DIR))
 
 import dashscope
 from dotenv import load_dotenv
+from copilot.config import get_dashscope_api_key
 from copilot.memory.weakness_tracker import WeaknessTracker
 
 load_dotenv(BASE_DIR / ".env")
@@ -23,19 +26,6 @@ load_dotenv(BASE_DIR / ".env")
 # ==========================================
 # 配置：从 .env 或 ~/.nanobot/config.json 读取 API Key
 # ==========================================
-def get_dashscope_api_key() -> str | None:
-    api_key = os.getenv("DASHSCOPE_API_KEY")
-    if api_key:
-        return api_key
-    config_path = Path.home() / ".nanobot" / "config.json"
-    if config_path.exists():
-        try:
-            config = json.loads(config_path.read_text(encoding="utf-8"))
-            return config.get("providers", {}).get("dashscope", {}).get("apiKey")
-        except Exception:
-            pass
-    return None
-
 dashscope.api_key = get_dashscope_api_key()
 if not dashscope.api_key:
     print("⚠️ 未找到 DASHSCOPE_API_KEY，请在 .env 或 ~/.nanobot/config.json 中配置。")
@@ -47,13 +37,13 @@ DATASET_PATH = BASE_DIR / "evals" / "datasets" / "golden_set.json"
 # 亮点 1: RAG Pipeline — 用 copilot.rag 检索 + Qwen 生成答案
 # 直接复用 copilot 层的 RAG 引擎，不造轮子，不污染 nanobot
 # ==========================================
-def ask_agent_with_rag(question: str) -> str:
+def ask_agent_with_rag(question: str) -> tuple[str, list[dict]]:
     """用 copilot RAG 检索上下文，再用 Qwen 生成专业回答"""
+    results: list[dict] = []
     try:
-        from copilot.rag.engine import get_chroma_collection
-        collection = get_chroma_collection()
-        results = collection.query(query_texts=[question], n_results=2)
-        docs = results.get("documents", [[]])[0]
+        retriever = HybridRetriever()
+        results = asyncio.run(retriever.search(question, top_k_retrieve=5, top_n_rerank=2))
+        docs = [r.get("text", "") for r in results]
         context = "\n\n".join(docs) if docs else "（未检索到相关资料）"
     except Exception as e:
         context = f"（RAG 检索失败: {e}）"
@@ -73,9 +63,9 @@ def ask_agent_with_rag(question: str) -> str:
         response = dashscope.Generation.call(
             model="qwen-max", prompt=prompt, result_format="text"
         )
-        return response.output.text.strip()
+        return response.output.text.strip(), results
     except Exception as e:
-        return f"[生成回答失败: {e}]"
+        return f"[生成回答失败: {e}]", []
 
 
 # ==========================================
@@ -121,6 +111,8 @@ def run_evaluation_pipeline():
 
     dataset = json.loads(DATASET_PATH.read_text(encoding="utf-8"))
     total_accuracy = total_faithfulness = 0
+    total_recall = 0.0
+    recall_count = 0
 
     print("⏳ 正在让 Agent 作答并交由 AI 裁判打分，请稍候...\n")
 
@@ -130,9 +122,18 @@ def run_evaluation_pipeline():
         question, expected = data["question"], data["expected_answer"]
 
         print(f"[{i}/{len(dataset)}] 评测中: {question}")
-        agent_answer = ask_agent_with_rag(question)
+        agent_answer, rag_results = ask_agent_with_rag(question)
+        retrieved_sources = {r.get("metadata", {}).get("source", "") for r in rag_results}
+        expected_sources = set(data.get("expected_sources", []))
+        recall = len(retrieved_sources & expected_sources) / len(expected_sources) if expected_sources else None
+        if recall is not None:
+            total_recall += recall
+            recall_count += 1
+
         preview = agent_answer[:80] + "..." if len(agent_answer) > 80 else agent_answer
         print(f"  📝 Agent: {preview}")
+        if recall is not None:
+            print(f"  🔍 Recall@K: {recall:.2f}")
 
         result = evaluate_answer(question, expected, agent_answer)
         print(f"  👉 准确性: {result.get('accuracy_score')}/5  幻觉控制: {result.get('faithfulness_score')}/5")
@@ -147,6 +148,10 @@ def run_evaluation_pipeline():
             "accuracy_score": result.get("accuracy_score", 0),
             "faithfulness_score": result.get("faithfulness_score", 0),
             "reason": result.get("reason", ""),
+            "recall_at_k": recall,
+            "retrieved_sources": sorted(s for s in retrieved_sources if s),
+            "expected_sources": sorted(expected_sources),
+            "rag_results": rag_results,
         })
 
     n = len(dataset)
@@ -154,6 +159,8 @@ def run_evaluation_pipeline():
     print("📊 评测报告 (Metrics Summary)")
     print(f"🎯 平均准确性  (Accuracy):    {total_accuracy/n:.1f} / 5.0")
     print(f"🛡️  平均无幻觉率 (Faithfulness): {total_faithfulness/n:.1f} / 5.0")
+    if recall_count > 0:
+        print(f"🔍 平均检索召回率 (Recall@K): {total_recall/recall_count:.2f}")
     print("=" * 40)
 
     # ==========================================

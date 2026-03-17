@@ -1,19 +1,10 @@
-import json
 import logging
-import os
-from pathlib import Path
 
 from openai import AsyncOpenAI
 
+from copilot.config import get_dashscope_api_key
+
 logger = logging.getLogger(__name__)
-
-
-def _read_config_key() -> str | None:
-    try:
-        cfg = json.loads((Path.home() / ".nanobot" / "config.json").read_text(encoding="utf-8"))
-        return cfg.get("providers", {}).get("dashscope", {}).get("apiKey")
-    except Exception:
-        return None
 
 
 async def rewrite_query(raw_query: str) -> str:
@@ -21,7 +12,7 @@ async def rewrite_query(raw_query: str) -> str:
     if not raw_query or not raw_query.strip():
         return raw_query
 
-    api_key = os.environ.get("DASHSCOPE_API_KEY") or _read_config_key()
+    api_key = get_dashscope_api_key()
     if not api_key:
         return raw_query
 

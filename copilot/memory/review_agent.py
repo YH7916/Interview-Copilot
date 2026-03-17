@@ -12,9 +12,18 @@ import logging # 用于记录日志，方便调试和监控
 from datetime import datetime # 用于获取当前时间，标记错题本条目
 
 # 复用 WeaknessTracker 的核心逻辑
-from copilot.memory.weakness_tracker import WeaknessTracker, _call_llm, _format_entry
+from copilot.memory.weakness_tracker import WeaknessTracker, _call_llm
 
 logger = logging.getLogger(__name__) # 获取当前模块的日志记录器
+
+
+def _infer_severity(bullets: str) -> str:
+    """根据薄弱点标记推断严重程度。"""
+    if "✅" in bullets and "❌" not in bullets and "⚠️" not in bullets:
+        return "🟢"
+    if bullets.count("❌") >= 2:
+        return "🔴"
+    return "🟡"
 
 # 分析对话的专用 Prompt
 _PROMPT = """\
@@ -73,10 +82,9 @@ class ReviewAgent:
             bullets = _fallback_extract(messages, e)
 
         # 4. 格式化日志条目
-        entry = _format_entry(avg=0.0, bullets=bullets)
-        # 重新标注时间戳，加入 🤖 机器人标识，区分开人为打分的记录
+        icon = _infer_severity(bullets)
         ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-        entry = entry.replace("评测记录", "面试复盘", 1).replace(f"[{ts}]", f"[{ts}] 🤖 ReviewAgent", 1)
+        entry = f"## [{ts}] 🤖 面试复盘 {icon}\n\n{bullets}\n"
         
         # 5. 持久化
         self.tracker._append(entry)

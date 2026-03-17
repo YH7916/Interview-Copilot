@@ -8,9 +8,11 @@ WeaknessTracker — 面试错题本（长期记忆层）
 from __future__ import annotations
 
 import json
-import os
+import threading
 from datetime import datetime
 from pathlib import Path
+
+from copilot.config import get_dashscope_api_key
 
 # 获取项目根目录 (Interview-Copilot/)
 _BASE = Path(__file__).resolve().parents[2]
@@ -32,6 +34,8 @@ _PROMPT = """\
 
 class WeaknessTracker:
     """持久化面试薄弱点，每次 Session 启动时通过 System Prompt 自动注入 AI 的脑子。"""
+
+    _lock = threading.Lock()
 
     def __init__(self, log_path: Path = LOG_PATH):
         # 初始化存储路径，并确保其父目录 (data/memory/) 存在
@@ -90,9 +94,10 @@ class WeaknessTracker:
             ) or f"- ⚠️ 薄弱点提取失败: {e}"
 
     def _append(self, entry: str) -> None:
-        """简单、稳健的文件追加方法。"""
-        with open(self.log_path, "a", encoding="utf-8") as f:
-            f.write(entry + "\n")
+        """线程安全的文件追加，防止多个 ReviewAgent 并发写入时数据交叉。"""
+        with self._lock:
+            with open(self.log_path, "a", encoding="utf-8") as f:
+                f.write(entry + "\n")
 
 
 # ── 工具函数 ──────────────────────────────────────────────────
@@ -107,14 +112,6 @@ def _call_llm(prompt: str) -> str:
     """调用 DashScope Qwen，从 config 或环境变量读取 API Key。"""
     import dashscope
 
-    dashscope.api_key = os.getenv("DASHSCOPE_API_KEY") or _read_config_key()
+    dashscope.api_key = get_dashscope_api_key()
     resp = dashscope.Generation.call(model="qwen-max", prompt=prompt, result_format="text")
     return resp.output.text.strip()
-
-
-def _read_config_key() -> str | None:
-    try:
-        cfg = json.loads((Path.home() / ".nanobot" / "config.json").read_text(encoding="utf-8"))
-        return cfg.get("providers", {}).get("dashscope", {}).get("apiKey")
-    except Exception:
-        return None

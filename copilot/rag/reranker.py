@@ -1,19 +1,10 @@
-import json
 import logging
-import os
-from pathlib import Path
 
 import httpx
 
+from copilot.config import get_dashscope_api_key
+
 logger = logging.getLogger(__name__)
-
-
-def _read_config_key() -> str | None:
-    try:
-        cfg = json.loads((Path.home() / ".nanobot" / "config.json").read_text(encoding="utf-8"))
-        return cfg.get("providers", {}).get("dashscope", {}).get("apiKey")
-    except Exception:
-        return None
 
 
 async def rerank(query: str, documents: list[str], top_n: int = 3) -> list[dict]:
@@ -22,7 +13,7 @@ async def rerank(query: str, documents: list[str], top_n: int = 3) -> list[dict]
         return []
 
     top_n = max(1, min(top_n, len(documents)))
-    api_key = os.environ.get("DASHSCOPE_API_KEY") or _read_config_key()
+    api_key = get_dashscope_api_key()
     if not api_key:
         return [{"index": i, "score": 0.0, "text": documents[i]} for i in range(top_n)]
 
