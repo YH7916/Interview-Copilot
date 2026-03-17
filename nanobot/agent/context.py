@@ -36,6 +36,15 @@ class ContextBuilder:
         if memory:
             parts.append(f"# Memory\n\n{memory}")
 
+        # 注入面试错题本（长期薄弱点记忆）
+        try:
+            from copilot.memory.weakness_tracker import WeaknessTracker
+            weakness_ctx = WeaknessTracker().get_context()
+            if weakness_ctx:
+                parts.append(weakness_ctx)
+        except Exception:
+            pass  # copilot 层不可用时静默降级
+
         always_skills = self.skills.get_always_skills()
         if always_skills:
             always_content = self.skills.load_skills_for_context(always_skills)

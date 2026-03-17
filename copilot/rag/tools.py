@@ -1,10 +1,22 @@
 import asyncio
 import logging
 from typing import Any
+
 from nanobot.agent.tools.base import Tool
-from copilot.rag.engine import get_chroma_collection
+
+from copilot.rag.hybrid_retriever import HybridRetriever
 
 logger = logging.getLogger(__name__)
+
+_hybrid_retriever: HybridRetriever | None = None
+
+
+def _get_hybrid_retriever() -> HybridRetriever:
+    global _hybrid_retriever
+    if _hybrid_retriever is None:
+        _hybrid_retriever = HybridRetriever()
+    return _hybrid_retriever
+
 
 class SearchConceptTool(Tool):
     """Tool to search for technical concepts and principles."""
@@ -35,24 +47,15 @@ class SearchConceptTool(Tool):
             if topic == "simulate_error":
                 raise ValueError("文档未找到")
 
-            # 延迟初始化集合，如果有问题会抛异常
-            collection = await asyncio.to_thread(get_chroma_collection)
-
-            # 核心：使用 ChromaDB 进行语义搜索
-            results_data = await asyncio.to_thread(
-                collection.query,
-                query_texts=[topic],
-                n_results=2
-            )
+            retriever = await asyncio.to_thread(_get_hybrid_retriever)
+            results_data = await retriever.search(topic, top_k_retrieve=10, top_n_rerank=2)
 
             results = []
-            if results_data and "documents" in results_data and results_data["documents"]:
-                docs = results_data["documents"][0]
-                metas = results_data["metadatas"][0]
-                for doc, meta in zip(docs, metas):
-                    snippet = doc
-                    source = meta.get("source", "未知来源")
-                    results.append(f"【来源文件】: {source}\n【相关内容】: ...{snippet}...")
+            for item in results_data:
+                snippet = item.get("text", "")
+                meta = item.get("metadata", {})
+                source = meta.get("source", "未知来源")
+                results.append(f"【来源文件】: {source}\n【相关内容】: ...{snippet}...")
 
             if not results:
                 raise ValueError("文档未找到")
@@ -97,28 +100,20 @@ class SearchCompanyQuestionsTool(Tool):
             if company == "simulate_error":
                 raise ValueError("文档未找到")
 
-            collection = await asyncio.to_thread(get_chroma_collection)
-
             search_query = f"{company} {position} 面试题"
-            
-            results_data = await asyncio.to_thread(
-                collection.query,
-                query_texts=[search_query],
-                n_results=3
-            )
+            retriever = await asyncio.to_thread(_get_hybrid_retriever)
+            results_data = await retriever.search(search_query, top_k_retrieve=10, top_n_rerank=3)
 
             results = []
-            if results_data and "documents" in results_data and results_data["documents"]:
-                docs = results_data["documents"][0]
-                metas = results_data["metadatas"][0]
-                for doc, meta in zip(docs, metas):
-                    snippet = doc
-                    source = meta.get("source", "未知来源")
-                    results.append(f"【来源文件】: {source}\n【面试题片段】: ...{snippet}...")
+            for item in results_data:
+                snippet = item.get("text", "")
+                meta = item.get("metadata", {})
+                source = meta.get("source", "未知来源")
+                results.append(f"【来源文件】: {source}\n【面试题片段】: ...{snippet}...")
 
             if not results:
                 raise ValueError("文档未找到")
-                
+
             return f"为您检索到以下关于 {company} {position} 的高匹配度面试题：\n\n" + "\n\n---\n\n".join(results)
 
         except Exception as e:
