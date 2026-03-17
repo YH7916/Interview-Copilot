@@ -1,10 +1,5 @@
-"""
-WeaknessTracker — 面试错题本（长期记忆层）
+"""错题本 — 长期记忆层，持久化面试薄弱点并注入 System Prompt。"""
 
-职责：
-  1. update(eval_results) — 负责把每次面试或评测的原始扣分项，转化为 Markdown 日志追加到文件中。
-  2. get_context()       — 负责读取日志，提供一个“摘要”给 System Prompt，让 AI 知道历史弱点。
-"""
 from __future__ import annotations
 
 import json
@@ -14,13 +9,10 @@ from pathlib import Path
 
 from copilot.config import get_dashscope_api_key
 
-# 获取项目根目录 (Interview-Copilot/)
-_BASE = Path(__file__).resolve().parents[2]
-# 定义错题本存储路径：data/memory/weakness_log.md
-LOG_PATH = _BASE / "data" / "memory" / "weakness_log.md"
+_ROOT = Path(__file__).resolve().parents[2]
+LOG_PATH = _ROOT / "data" / "memory" / "weakness_log.md"
 
-# 提炼薄弱点的 Prompt 模板
-_PROMPT = """\
+_EXTRACT_PROMPT = """\
 你是面试表现分析师。根据评测数据，提炼候选人的核心薄弱点。
 
 【评测数据（JSON）】
@@ -33,74 +25,58 @@ _PROMPT = """\
 
 
 class WeaknessTracker:
-    """持久化面试薄弱点，每次 Session 启动时通过 System Prompt 自动注入 AI 的脑子。"""
+    """每次评测后提炼薄弱点 → 写入 Markdown → 下次 Session 注入 AI 上下文。"""
 
-    _lock = threading.Lock()
+    _lock = threading.Lock()  # 保护并发写入（多个 ReviewAgent 同时分析时）
 
     def __init__(self, log_path: Path = LOG_PATH):
-        # 初始化存储路径，并确保其父目录 (data/memory/) 存在
         self.log_path = log_path
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # ── 公开接口：供外部调用 ───────────────────────────────────────────
-
     def update(self, eval_results: list[dict]) -> None:
-        """
-        核心方法：传入评测结果列表，自动提炼并记录薄弱点。
-        eval_results 格式预期包含 accuracy_score, question, reason 等字段。
-        """
-        # 1. 调用 LLM 提炼 Markdown 格式的薄弱点列表
+        """提炼薄弱点并追加到错题本。"""
         bullets = self._extract(eval_results)
-        # 2. 计算本次面试的平均准确率，用于显示红/黄/绿灯
         avg = sum(r.get("accuracy_score", 0) for r in eval_results) / max(len(eval_results), 1)
-        # 3. 按照带时间戳的格式，将内容追加到文件末尾
         self._append(_format_entry(avg, bullets))
 
     def get_context(self) -> str:
-        """
-        读取错题本文件，封装成用于注入 System Prompt 的 context 字符串。
-        如果文件不存在或为空，返回空字符串，不影响 AI 正常生成。
-        """
+        """读取错题本，返回可直接注入 System Prompt 的文本。空则返回 ''。"""
         if not self.log_path.exists():
             return ""
         text = self.log_path.read_text(encoding="utf-8").strip()
         if not text:
             return ""
-        # 封装成 Markdown 章节，方便 AI 理解这是历史背景
         return (
             "## 📋 候选人历史薄弱点（错题本）\n\n"
-            "以下为历次模拟面试中暴露的知识盲区，请在回答时特别关注并主动引导：\n\n"
-            + text
+            "以下为历次面试暴露的知识盲区，请主动引导：\n\n" + text
         )
 
-    # ── 内部逻辑方法 (Private-like) ──────────────────────────────────────
+    # ── 内部 ────────────────────────────────────────────────────
 
     def _extract(self, eval_results: list[dict]) -> str:
-        """调用 Qwen 模型，从海量的 JSON 评测数据中精炼出几条核心弱点。"""
-        # 过滤：只关心不到 5 分（满分）的项目
         weak = [r for r in eval_results if r.get("accuracy_score", 5) < 5]
         if not weak:
             return "- ✅ 本次全部满分，无明显薄弱点"
-
         try:
-            # 正常路径：请求 AI 进行提炼
-            return _call_llm(_PROMPT.format(eval_json=json.dumps(weak, ensure_ascii=False, indent=2)))
-        except Exception as e:
-            # 降级路径：API 挂了时，不报错，直接拼接原始的 reason 字段
+            return _call_llm(
+                _EXTRACT_PROMPT.format(eval_json=json.dumps(weak, ensure_ascii=False, indent=2))
+            )
+        except Exception:
+            # 降级：直接拼接 reason
             return "\n".join(
                 f"- {'❌' if r.get('accuracy_score', 0) <= 3 else '⚠️'} "
-                f"**{r.get('question','?')[:30]}**: {r.get('reason','')}"
+                f"**{r.get('question', '?')[:30]}**: {r.get('reason', '')}"
                 for r in weak
-            ) or f"- ⚠️ 薄弱点提取失败: {e}"
+            )
 
     def _append(self, entry: str) -> None:
-        """线程安全的文件追加，防止多个 ReviewAgent 并发写入时数据交叉。"""
         with self._lock:
             with open(self.log_path, "a", encoding="utf-8") as f:
                 f.write(entry + "\n")
 
 
-# ── 工具函数 ──────────────────────────────────────────────────
+# ── 工具函数（供 ReviewAgent 等模块复用）────────────────────────
+
 
 def _format_entry(avg: float, bullets: str) -> str:
     icon = "🔴" if avg < 3 else "🟡" if avg < 4 else "🟢"
@@ -109,7 +85,7 @@ def _format_entry(avg: float, bullets: str) -> str:
 
 
 def _call_llm(prompt: str) -> str:
-    """调用 DashScope Qwen，从 config 或环境变量读取 API Key。"""
+    """同步调用 DashScope Qwen。"""
     import dashscope
 
     dashscope.api_key = get_dashscope_api_key()
