@@ -1,0 +1,229 @@
+{
+  "session_id": "demo-interview",
+  "user_id": "demo",
+  "topic": "agent",
+  "started_at": "2026-03-21T00:00:00",
+  "completed_at": "2026-03-21T00:00:00",
+  "turns": [
+    {
+      "index": 1,
+      "stage": "opening",
+      "category": "project_background",
+      "question": "Tell me about yourself and why you are applying for AI agent internships.",
+      "answer": "I am a sophomore in computer science at Zhejiang University graduating in 2028. My main project is Interview Copilot, a retrieval-augmented interview harness built on top of nanobot, and I also built CuteGo to keep browser-side inference responsive with WebWorker.",
+      "policy_action": "advance",
+      "policy_reason": "no_follow_up_available",
+      "follow_up": "",
+      "follow_up_answer": "",
+      "review": {
+        "question": "Tell me about yourself and why you are applying for AI agent internships.",
+        "category": "project_background",
+        "stage": "opening",
+        "answer_status": "grounded",
+        "candidate_answer": "I am a sophomore in computer science at Zhejiang University graduating in 2028. My main project is Interview Copilot, a retrieval-augmented interview harness built on top of nanobot, and I also built CuteGo to keep browser-side inference responsive with WebWorker.",
+        "reference_answer": "Lead with school stage, strongest project, second supporting project, and why AI agent work is a fit.",
+        "pitfalls": [
+          "Too generic and not tied to real projects.",
+          "No clear connection between background and target role."
+        ],
+        "accuracy_score": 4,
+        "clarity_score": 4,
+        "depth_score": 4,
+        "evidence_score": 4,
+        "structure_score": 4,
+        "overall_score": 4.0,
+        "reason": "Clear background, strong project anchor, and a good role fit."
+      }
+    },
+    {
+      "index": 2,
+      "stage": "project",
+      "category": "agent_architecture",
+      "question": "How did you design the memory boundary in Interview Copilot?",
+      "answer": "Nanobot keeps long-term memory, while copilot owns explicit runtime state and replayable traces. That keeps routing policy inspectable and avoids hiding control flow inside another memory layer.",
+      "policy_action": "advance",
+      "policy_reason": "answer_is_good_enough",
+      "follow_up": "",
+      "follow_up_answer": "",
+      "review": {
+        "question": "How did you design the memory boundary in Interview Copilot?",
+        "category": "agent_architecture",
+        "stage": "project",
+        "answer_status": "grounded",
+        "candidate_answer": "Nanobot keeps long-term memory, while copilot owns explicit runtime state and replayable traces. That keeps routing policy inspectable and avoids hiding control flow inside another memory layer.",
+        "reference_answer": "Explain the split between long-term memory, explicit runtime state, and replayable traces, and why that keeps policy observable.",
+        "pitfalls": [
+          "Mixing long-term memory with runtime control.",
+          "Only naming short-term and long-term memory without write/read policy."
+        ],
+        "accuracy_score": 4,
+        "clarity_score": 4,
+        "depth_score": 4,
+        "evidence_score": 4,
+        "structure_score": 5,
+        "overall_score": 4.2,
+        "reason": "Good boundary definition and rationale. One concrete failure case would make it even stronger."
+      }
+    },
+    {
+      "index": 3,
+      "stage": "project",
+      "category": "project_architecture",
+      "question": "How do scheduling and fallback work in the runtime?",
+      "answer": "We start with project-aware routing and then fall back to a simpler path when the signal is weak.",
+      "policy_action": "follow_up",
+      "policy_reason": "need_deeper_reasoning",
+      "follow_up": "Let's go one layer deeper. Give me the concrete switching rule when one project trail is exhausted or weak.",
+      "follow_up_answer": "We keep an explicit goal state with active project, phase, and recent weak points. If confidence is low or a project has already been pushed far enough, the harness switches to another project or a different interview dimension instead of forcing more shallow follow-ups.",
+      "review": {
+        "question": "How do scheduling and fallback work in the runtime?",
+        "category": "project_architecture",
+        "stage": "project",
+        "answer_status": "grounded",
+        "candidate_answer": "We start with project-aware routing and then fall back to a simpler path when the signal is weak.\n补充回答：We keep an explicit goal state with active project, phase, and recent weak points. If confidence is low or a project has already been pushed far enough, the harness switches to another project or a different interview dimension instead of forcing more shallow follow-ups.",
+        "reference_answer": "Describe project-aware routing, active phase tracking, switching thresholds, and the degrade path when evidence is weak.",
+        "pitfalls": [
+          "Only saying the system reports an error to the user.",
+          "No concrete routing or degrade rule."
+        ],
+        "accuracy_score": 4,
+        "clarity_score": 4,
+        "depth_score": 3,
+        "evidence_score": 3,
+        "structure_score": 4,
+        "overall_score": 3.6,
+        "reason": "Routing policy is clear. Add one concrete threshold or failure example to make it more convincing."
+      }
+    },
+    {
+      "index": 4,
+      "stage": "project",
+      "category": "project_evaluation",
+      "question": "How do you review answers and turn them into the next drill?",
+      "answer": "Each answer is scored on accuracy, clarity, depth, evidence, and structure. The weakest answers are converted into a next-drill list so the next session starts from the real gap instead of a random new question.",
+      "policy_action": "advance",
+      "policy_reason": "answer_is_good_enough",
+      "follow_up": "",
+      "follow_up_answer": "",
+      "review": {
+        "question": "How do you review answers and turn them into the next drill?",
+        "category": "project_evaluation",
+        "stage": "project",
+        "answer_status": "grounded",
+        "candidate_answer": "Each answer is scored on accuracy, clarity, depth, evidence, and structure. The weakest answers are converted into a next-drill list so the next session starts from the real gap instead of a random new question.",
+        "reference_answer": "Explain structured scoring, weakness extraction, drill generation, and why the next session starts from the weakest answer.",
+        "pitfalls": [
+          "No explicit scoring dimensions.",
+          "Review exists but does not change the next session."
+        ],
+        "accuracy_score": 5,
+        "clarity_score": 4,
+        "depth_score": 4,
+        "evidence_score": 4,
+        "structure_score": 5,
+        "overall_score": 4.4,
+        "reason": "Strong review loop with explicit scoring and a clear handoff into the next drill."
+      }
+    }
+  ],
+  "summary": {
+    "count": 4,
+    "average_overall": 4.0,
+    "results": [
+      {
+        "question": "Tell me about yourself and why you are applying for AI agent internships.",
+        "category": "project_background",
+        "stage": "opening",
+        "answer_status": "grounded",
+        "candidate_answer": "I am a sophomore in computer science at Zhejiang University graduating in 2028. My main project is Interview Copilot, a retrieval-augmented interview harness built on top of nanobot, and I also built CuteGo to keep browser-side inference responsive with WebWorker.",
+        "reference_answer": "Lead with school stage, strongest project, second supporting project, and why AI agent work is a fit.",
+        "pitfalls": [
+          "Too generic and not tied to real projects.",
+          "No clear connection between background and target role."
+        ],
+        "accuracy_score": 4,
+        "clarity_score": 4,
+        "depth_score": 4,
+        "evidence_score": 4,
+        "structure_score": 4,
+        "overall_score": 4.0,
+        "reason": "Clear background, strong project anchor, and a good role fit."
+      },
+      {
+        "question": "How did you design the memory boundary in Interview Copilot?",
+        "category": "agent_architecture",
+        "stage": "project",
+        "answer_status": "grounded",
+        "candidate_answer": "Nanobot keeps long-term memory, while copilot owns explicit runtime state and replayable traces. That keeps routing policy inspectable and avoids hiding control flow inside another memory layer.",
+        "reference_answer": "Explain the split between long-term memory, explicit runtime state, and replayable traces, and why that keeps policy observable.",
+        "pitfalls": [
+          "Mixing long-term memory with runtime control.",
+          "Only naming short-term and long-term memory without write/read policy."
+        ],
+        "accuracy_score": 4,
+        "clarity_score": 4,
+        "depth_score": 4,
+        "evidence_score": 4,
+        "structure_score": 5,
+        "overall_score": 4.2,
+        "reason": "Good boundary definition and rationale. One concrete failure case would make it even stronger."
+      },
+      {
+        "question": "How do scheduling and fallback work in the runtime?",
+        "category": "project_architecture",
+        "stage": "project",
+        "answer_status": "grounded",
+        "candidate_answer": "We start with project-aware routing and then fall back to a simpler path when the signal is weak.\n补充回答：We keep an explicit goal state with active project, phase, and recent weak points. If confidence is low or a project has already been pushed far enough, the harness switches to another project or a different interview dimension instead of forcing more shallow follow-ups.",
+        "reference_answer": "Describe project-aware routing, active phase tracking, switching thresholds, and the degrade path when evidence is weak.",
+        "pitfalls": [
+          "Only saying the system reports an error to the user.",
+          "No concrete routing or degrade rule."
+        ],
+        "accuracy_score": 4,
+        "clarity_score": 4,
+        "depth_score": 3,
+        "evidence_score": 3,
+        "structure_score": 4,
+        "overall_score": 3.6,
+        "reason": "Routing policy is clear. Add one concrete threshold or failure example to make it more convincing."
+      },
+      {
+        "question": "How do you review answers and turn them into the next drill?",
+        "category": "project_evaluation",
+        "stage": "project",
+        "answer_status": "grounded",
+        "candidate_answer": "Each answer is scored on accuracy, clarity, depth, evidence, and structure. The weakest answers are converted into a next-drill list so the next session starts from the real gap instead of a random new question.",
+        "reference_answer": "Explain structured scoring, weakness extraction, drill generation, and why the next session starts from the weakest answer.",
+        "pitfalls": [
+          "No explicit scoring dimensions.",
+          "Review exists but does not change the next session."
+        ],
+        "accuracy_score": 5,
+        "clarity_score": 4,
+        "depth_score": 4,
+        "evidence_score": 4,
+        "structure_score": 5,
+        "overall_score": 4.4,
+        "reason": "Strong review loop with explicit scoring and a clear handoff into the next drill."
+      }
+    ],
+    "drill_plan": [
+      {
+        "question": "How do scheduling and fallback work in the runtime?",
+        "focus": "add concrete evidence, metrics, and implementation detail",
+        "reason": "Routing policy is clear. Add one concrete threshold or failure example to make it more convincing."
+      },
+      {
+        "question": "Tell me about yourself and why you are applying for AI agent internships.",
+        "focus": "add concrete evidence, metrics, and implementation detail",
+        "reason": "Clear background, strong project anchor, and a good role fit."
+      },
+      {
+        "question": "How did you design the memory boundary in Interview Copilot?",
+        "focus": "add concrete evidence, metrics, and implementation detail",
+        "reason": "Good boundary definition and rationale. One concrete failure case would make it even stronger."
+      }
+    ],
+    "summary": "# Interview Review\n\n- reviewed: 4\n- average_overall: 4.0/5\n\n1. Tell me about yourself and why you are applying for AI agent internships.\n   - overall: 4.0/5\n   - accuracy: 4/5\n   - reason: Clear background, strong project anchor, and a good role fit.\n2. How did you design the memory boundary in Interview Copilot?\n   - overall: 4.2/5\n   - accuracy: 4/5\n   - reason: Good boundary definition and rationale. One concrete failure case would make it even stronger.\n3. How do scheduling and fallback work in the runtime?\n   - overall: 3.6/5\n   - accuracy: 4/5\n   - reason: Routing policy is clear. Add one concrete threshold or failure example to make it more convincing.\n4. How do you review answers and turn them into the next drill?\n   - overall: 4.4/5\n   - accuracy: 5/5\n   - reason: Strong review loop with explicit scoring and a clear handoff into the next drill.\n\n## Next Drill\n\n1. How do scheduling and fallback work in the runtime?\n   - focus: add concrete evidence, metrics, and implementation detail\n   - reason: Routing policy is clear. Add one concrete threshold or failure example to make it more convincing.\n2. Tell me about yourself and why you are applying for AI agent internships.\n   - focus: add concrete evidence, metrics, and implementation detail\n   - reason: Clear background, strong project anchor, and a good role fit.\n3. How did you design the memory boundary in Interview Copilot?\n   - focus: add concrete evidence, metrics, and implementation detail\n   - reason: Good boundary definition and rationale. One concrete failure case would make it even stronger.\n"
+  }
+}

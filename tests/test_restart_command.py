@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -74,3 +74,27 @@ class TestRestartCommand:
 
         assert response is not None
         assert "/restart" in response.content
+        assert "/ingest" in response.content
+
+    @pytest.mark.asyncio
+    async def test_ingest_command_uses_nowcoder_tool(self):
+        loop, _ = _make_loop()
+        msg = InboundMessage(channel="cli", sender_id="user", chat_id="direct", content="/ingest 14")
+        tool = MagicMock()
+        tool.execute = AsyncMock(
+            return_value='{"written":["demo.md"],"skipped":{"stale":1,"irrelevant":2,"fetch_error":3}}'
+        )
+
+        with patch.object(loop.tools, "get", return_value=tool):
+            response = await loop._process_message(msg)
+
+        assert response is not None
+        assert "Nowcoder ingest finished." in response.content
+        assert "updated_within_days: 14" in response.content
+        tool.execute.assert_awaited_once_with(
+            count_per_query=30,
+            max_reports=200,
+            fetch_timeout=12,
+            dry_run=False,
+            updated_within_days=14,
+        )

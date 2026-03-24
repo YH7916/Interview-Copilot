@@ -1,13 +1,13 @@
 [project]
 name = "nanobot-ai"
 version = "0.1.4.post5"
-description = "A lightweight personal AI assistant framework"
+description = "A lightweight agent runtime powering Interview Copilot"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
     {name = "nanobot contributors"}
 ]
-keywords = ["ai", "agent", "chatbot"]
+keywords = ["ai", "agent", "interview", "harness", "retrieval"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -21,7 +21,7 @@ dependencies = [
     "litellm>=1.82.1,<2.0.0",
     "pydantic>=2.12.0,<3.0.0",
     "pydantic-settings>=2.12.0,<3.0.0",
-    "websockets>=16.0,<17.0",
+    "websockets>=15.0,<16.0",
     "websocket-client>=1.9.0,<2.0.0",
     "httpx>=0.28.0,<1.0.0",
     "ddgs>=9.5.5,<10.0.0",
@@ -73,6 +73,9 @@ dev = [
 
 [project.scripts]
 nanobot = "nanobot.cli.commands:app"
+interview-agent = "nanobot.cli.commands:launch_interview_agent"
+interview-gateway = "nanobot.cli.commands:launch_interview_gateway"
+interview-demo = "nanobot.cli.commands:launch_interview_demo"
 
 [build-system]
 requires = ["hatchling"]
@@ -83,6 +86,10 @@ allow-direct-references = true
 
 [tool.hatch.build]
 include = [
+    "copilot/**/*.py",
+    "copilot/web_demo/**/*.html",
+    "copilot/web_demo/**/*.css",
+    "copilot/web_demo/**/*.js",
     "nanobot/**/*.py",
     "nanobot/templates/**/*.md",
     "nanobot/skills/**/*.md",
@@ -90,16 +97,18 @@ include = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["nanobot"]
+packages = ["nanobot", "copilot"]
 
 [tool.hatch.build.targets.wheel.sources]
 "nanobot" = "nanobot"
+"copilot" = "copilot"
 
 [tool.hatch.build.targets.wheel.force-include]
 "bridge" = "nanobot/bridge"
 
 [tool.hatch.build.targets.sdist]
 include = [
+    "copilot/",
     "nanobot/",
     "bridge/",
     "README.md",

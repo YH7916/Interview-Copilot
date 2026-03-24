@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Interview Copilot Demo</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <aside class="rail">
+        <div class="brand-block">
+          <p class="eyebrow">Interview Copilot</p>
+          <h1>Model-Backed Interview Agent Demo</h1>
+          <p class="lede">
+            A thin web shell on top of the real harness. Use it to run `/prep`,
+            `/interview`, and `/review` through the same runtime you would demo
+            in CLI.
+          </p>
+        </div>
+
+        <div class="panel">
+          <p class="panel-label">Runtime</p>
+          <div class="meta-row">
+            <span class="meta-pill" id="health-pill">Connecting...</span>
+            <span class="meta-note" id="model-note">model: unknown</span>
+          </div>
+          <p class="panel-copy">
+            The page is intentionally thin. The interesting part is the
+            runtime, state, retrieval, trace, and review loop behind it.
+          </p>
+        </div>
+
+        <div class="panel">
+          <p class="panel-label">Starter Flows</p>
+          <div class="chip-list">
+            <button class="chip" data-message='/prep agent --resume "D:\resume\CV.typ" --company ByteDance --position "AI Agent Intern" --target "Need agent orchestration, retrieval, evaluation, tracing, and strong project storytelling."'>Prep Pack</button>
+            <button class="chip" data-message='/interview agent --resume "D:\resume\CV.typ"'>Start Mock</button>
+            <button class="chip" data-message="/review">Review Session</button>
+            <button class="chip" data-message="/recent 7">Recent Reports</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <p class="panel-label">Capture Plan</p>
+          <ul class="shot-list">
+            <li>Screenshot a prep pack with target gap analysis and trace output.</li>
+            <li>Screenshot a live follow-up sequence after a shallow answer.</li>
+            <li>Screenshot a review result with `Next Drill` visible.</li>
+          </ul>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <header class="chat-header">
+          <div>
+            <p class="eyebrow">Live Session</p>
+            <h2>Harness Transcript</h2>
+          </div>
+          <div class="header-actions">
+            <button class="ghost-button" id="new-session-button" type="button">New Session</button>
+            <button class="clear-button" id="clear-button" type="button">Clear Transcript</button>
+          </div>
+        </header>
+
+        <section class="chat-log" id="chat-log">
+          <article class="message assistant">
+            <div class="message-head">
+              <span class="role">Copilot</span>
+              <span class="tag">Ready</span>
+            </div>
+            <pre class="message-body">Try a starter flow or type /help. For a screenshot-friendly path, run /prep first, then /interview, answer 2-3 questions, and finish with /review.</pre>
+          </article>
+        </section>
+
+        <form class="composer" id="composer">
+          <label class="composer-label" for="message-input">Command or answer</label>
+          <textarea
+            id="message-input"
+            name="message"
+            rows="3"
+            placeholder='Example: /interview agent --resume "D:\resume\CV.typ"'
+          ></textarea>
+          <div class="composer-actions">
+            <p class="composer-hint">The page talks to the real local runtime, not a mocked transcript.</p>
+            <button class="send-button" id="send-button" type="submit">Send</button>
+          </div>
+        </form>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

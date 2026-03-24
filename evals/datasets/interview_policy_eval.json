@@ -1,0 +1,29 @@
+[
+  {
+    "name": "shallow_short_answer",
+    "answer": "先做召回。",
+    "depth_score": 2,
+    "evidence_score": 1,
+    "overall_score": 2.5,
+    "expected_follow_up": true,
+    "has_follow_ups": true
+  },
+  {
+    "name": "good_structured_answer",
+    "answer": "我会先讲任务理解，再拆成规划、记忆、工具、执行和观测五层，并结合 tool routing、失败降级和 trace 说明工程实现。",
+    "depth_score": 4,
+    "evidence_score": 4,
+    "overall_score": 4.2,
+    "expected_follow_up": false,
+    "has_follow_ups": true
+  },
+  {
+    "name": "no_follow_up_defined",
+    "answer": "我会从召回、重排和生成三个层面回答。",
+    "depth_score": 4,
+    "evidence_score": 3,
+    "overall_score": 4.0,
+    "expected_follow_up": false,
+    "has_follow_ups": false
+  }
+]

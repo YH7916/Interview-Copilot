@@ -37,7 +37,7 @@ def load_config(config_path: Path | None = None) -> Config:
 
     if path.exists():
         try:
-            with open(path, encoding="utf-8") as f:
+            with open(path, encoding="utf-8-sig") as f:
                 data = json.load(f)
             data = _migrate_config(data)
             return Config.model_validate(data)

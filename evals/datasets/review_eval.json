@@ -1,0 +1,35 @@
+[
+  {
+    "question": "RAG召回链路怎么设计？",
+    "expected_answer": "先说明召回、重排、生成三段链路，再补充评测指标、降级策略和 badcase 回流。",
+    "actual_answer": "我会先做 embedding 召回，再做 rerank，最后生成答案，并用 badcase 持续优化。",
+    "pitfalls": [
+      "只讲概念，不讲链路",
+      "没有提评测指标"
+    ],
+    "expected_keywords": [
+      "召回",
+      "rerank",
+      "生成",
+      "badcase"
+    ],
+    "expected_min_accuracy": 3
+  },
+  {
+    "question": "Agent 和 Workflow 的边界是什么？",
+    "expected_answer": "Workflow 负责稳定主干流程，Agent 负责开放式理解、规划和局部决策，真实系统常常是 Workflow + LLM 决策节点。",
+    "actual_answer": "Workflow 更稳定可控，Agent 更灵活，很多系统本质上是 Workflow 加上 LLM 决策节点。",
+    "pitfalls": [
+      "把二者说成完全对立",
+      "没有讲工程取舍"
+    ],
+    "expected_keywords": [
+      "workflow",
+      "稳定",
+      "agent",
+      "灵活",
+      "决策"
+    ],
+    "expected_min_accuracy": 4
+  }
+]

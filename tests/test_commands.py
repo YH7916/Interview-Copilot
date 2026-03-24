@@ -343,6 +343,14 @@ def test_agent_warns_about_deprecated_memory_window(mock_agent_runtime):
     assert "contextWindowTokens" in result.stdout
 
 
+def test_interview_agent_alias_reuses_agent_runtime(mock_agent_runtime):
+    result = runner.invoke(app, ["interview-agent", "-m", "hello"])
+
+    assert result.exit_code == 0
+    mock_agent_runtime["agent_loop"].process_direct.assert_awaited_once()
+    mock_agent_runtime["print_response"].assert_called_once_with("mock-response", render_markdown=True)
+
+
 def test_gateway_uses_workspace_from_config_by_default(monkeypatch, tmp_path: Path) -> None:
     config_file = tmp_path / "instance" / "config.json"
     config_file.parent.mkdir(parents=True)

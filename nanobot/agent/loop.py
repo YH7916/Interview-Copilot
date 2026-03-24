@@ -17,9 +17,14 @@ from nanobot.agent.context import ContextBuilder
 from nanobot.agent.memory import MemoryConsolidator
 from nanobot.agent.subagent import SubagentManager
 from nanobot.agent.tools.cron import CronTool
+from nanobot.agent.tools.digest import ShowDailyDigestTool
 from nanobot.agent.skills import BUILTIN_SKILLS_DIR
 from nanobot.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
+from nanobot.agent.tools.interview import PrepareMockInterviewTool
 from nanobot.agent.tools.message import MessageTool
+from nanobot.agent.tools.nowcoder import CollectNowcoderInterviewsTool
+from nanobot.agent.tools.prep import PrepareInterviewPrepTool
+from nanobot.agent.tools.recent import ShowRecentReportsTool
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.review import TriggerReviewTool
 from nanobot.agent.tools.shell import ExecTool
@@ -102,6 +107,7 @@ class AgentLoop:
         self._mcp_connecting = False
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
         self._background_tasks: list[asyncio.Task] = []
+        self._interviews: dict[str, Any] = {}
         self._processing_lock = asyncio.Lock()
         self.memory_consolidator = MemoryConsolidator(
             workspace=workspace,
@@ -129,6 +135,11 @@ class AgentLoop:
         ))
         self.tools.register(WebSearchTool(config=self.web_search_config, proxy=self.web_proxy))
         self.tools.register(WebFetchTool(proxy=self.web_proxy))
+        self.tools.register(CollectNowcoderInterviewsTool())
+        self.tools.register(ShowRecentReportsTool())
+        self.tools.register(ShowDailyDigestTool())
+        self.tools.register(PrepareInterviewPrepTool())
+        self.tools.register(PrepareMockInterviewTool())
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:
@@ -283,6 +294,7 @@ class AgentLoop:
     async def _handle_stop(self, msg: InboundMessage) -> None:
         """Cancel all active tasks and subagents for the session."""
         tasks = self._active_tasks.pop(msg.session_key, [])
+        self._interviews.pop(msg.session_key, None)
         cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
         for t in tasks:
             try:
@@ -309,6 +321,269 @@ class AgentLoop:
             os.execv(sys.executable, [sys.executable, "-m", "nanobot"] + sys.argv[1:])
 
         asyncio.create_task(_do_restart())
+
+    async def _handle_nowcoder_ingest(self, msg: InboundMessage, cmd: str) -> OutboundMessage:
+        """Run the built-in Nowcoder ingest flow with simple defaults."""
+        parts = cmd.split()
+        days = 7
+        if len(parts) >= 2:
+            try:
+                days = max(1, min(int(parts[1]), 90))
+            except ValueError:
+                pass
+
+        tool = self.tools.get("collect_nowcoder_interviews")
+        if tool is None:
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="Nowcoder ingest tool is not available.",
+            )
+
+        result_raw = await tool.execute(
+            count_per_query=30,
+            max_reports=200,
+            fetch_timeout=12,
+            dry_run=False,
+            updated_within_days=days,
+        )
+        try:
+            result = json.loads(result_raw)
+        except Exception:
+            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=result_raw)
+
+        lines = [
+            "Nowcoder ingest finished.",
+            f"- updated_within_days: {days}",
+            f"- written: {len(result.get('written', []))}",
+            f"- stale: {result.get('skipped', {}).get('stale', 0)}",
+            f"- irrelevant: {result.get('skipped', {}).get('irrelevant', 0)}",
+            f"- fetch_error: {result.get('skipped', {}).get('fetch_error', 0)}",
+            "- next_step: /recent 7 or /digest 1",
+        ]
+        written = result.get("written", [])
+        if written:
+            lines.append(f"- latest: {written[0]}")
+        return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(lines))
+
+    async def _handle_daily_digest(self, msg: InboundMessage, cmd: str) -> OutboundMessage:
+        """Render the local daily digest with simple defaults."""
+        parts = cmd.split()
+        days = 1
+        if len(parts) >= 2:
+            try:
+                days = max(1, min(int(parts[1]), 30))
+            except ValueError:
+                pass
+
+        tool = self.tools.get("show_daily_digest")
+        if tool is None:
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="Daily digest tool is not available.",
+            )
+
+        result = await tool.execute(days=days)
+        return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=result)
+
+    async def _handle_recent_reports(self, msg: InboundMessage, cmd: str) -> OutboundMessage:
+        """Render a concise overview of recently kept materials."""
+        parts = cmd.split()
+        days = 7
+        if len(parts) >= 2:
+            try:
+                days = max(1, min(int(parts[1]), 30))
+            except ValueError:
+                pass
+
+        tool = self.tools.get("show_recent_reports")
+        if tool is None:
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="Recent reports tool is not available.",
+            )
+
+        result = await tool.execute(days=days, limit=10)
+        return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=result)
+
+    async def _handle_mock_interview(self, msg: InboundMessage, cmd: str) -> OutboundMessage:
+        """Start a live interview harness for the current session."""
+        topic, resume_path, interview_style = self._parse_interview_command(msg.content.strip())
+        try:
+            from copilot.app import build_live_interview
+
+            interview = build_live_interview(
+                user_id=msg.sender_id,
+                topic=topic,
+                max_questions=6,
+                recent=True,
+                candidate_profile_path=resume_path,
+                interview_style=interview_style,
+            )
+        except Exception as exc:
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=f"Mock interview is not available: {exc}",
+            )
+
+        self._interviews[msg.session_key] = interview
+        return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=interview.open())
+
+    async def _handle_interview_prep(self, msg: InboundMessage, cmd: str) -> OutboundMessage:
+        """Build a structured prep pack for the current target interview."""
+        topic, resume_path, company, position, target_description = self._parse_prep_command(msg.content.strip())
+        tool = self.tools.get("prepare_interview_prep")
+        if tool is None:
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="Interview prep tool is not available.",
+            )
+
+        result = await tool.execute(
+            topic=topic,
+            company=company,
+            position=position,
+            target_description=target_description,
+            candidate_profile_path=resume_path,
+            max_questions=8,
+            recent=True,
+        )
+        return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=result)
+
+    async def _handle_interview_review(self, msg: InboundMessage, session: Session) -> OutboundMessage:
+        """Review the current session as an interview dialogue."""
+        interview = self._interviews.get(msg.session_key)
+        if interview is not None:
+            report = interview.review(persist=False)
+            result = report.get("summary", "No interview review available.")
+            if getattr(interview, "trace_path", None):
+                result = f"{result.rstrip()}\n\n- trace: {interview.trace_path}"
+            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=result)
+
+        try:
+            from copilot.app import render_interview_review
+
+            result = render_interview_review(session.get_history(max_messages=0), persist=False)
+        except Exception as exc:
+            result = f"Interview review failed: {exc}"
+        return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=result)
+
+    async def _handle_schedule_digest(self, msg: InboundMessage) -> OutboundMessage:
+        """Schedule a daily 9:00 digest for the current chat."""
+        tool = self.tools.get("cron")
+        if tool is None:
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="Cron tool is not available.",
+            )
+
+        result = await tool.execute(
+            action="add",
+            message=(
+                "Call show_daily_digest with days=1 and send the result back to this chat. "
+                "Keep the report concise and structured."
+            ),
+            cron_expr="0 9 * * *",
+            tz="Asia/Shanghai",
+        )
+        return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=result)
+
+    @staticmethod
+    def _looks_like_greeting(text: str) -> bool:
+        normalized = text.strip().lower()
+        if normalized in {"hi", "hello", "hey", "/start", "start", "menu", "help"}:
+            return True
+        return normalized in {"你好", "您好", "在吗", "开始", "菜单", "功能", "怎么用"}
+
+    @staticmethod
+    def _is_first_turn(session: Session) -> bool:
+        return not session.messages
+
+    @staticmethod
+    def _build_help_menu() -> str:
+        try:
+            from copilot.app import render_assistant_menu
+
+            return render_assistant_menu()
+        except Exception:
+            return "\n".join(
+                [
+                    "Interview Copilot",
+                    "",
+                    "Available actions:",
+                    "- /ingest [days]",
+                    "- /recent [days]",
+                    "- /digest [days]",
+                    "- /prep [topic] [--resume path] [--company name] [--position role]",
+                    "- /interview [topic] [--resume path]",
+                    "- /review",
+                    "- answer directly after /interview",
+                    "- /help",
+                ]
+            )
+
+    @staticmethod
+    def _parse_interview_command(content: str) -> tuple[str, str, str]:
+        command = content.strip()
+        payload = command.split(maxsplit=1)[1].strip() if " " in command else ""
+        if not payload:
+            return "", "", "auto"
+
+        topic = payload
+        resume_path = ""
+        interview_style = "auto"
+
+        resume_match = re.search(r'--resume\s+(?:"([^"]+)"|\'([^\']+)\'|(\S+))', topic)
+        if resume_match is not None:
+            resume_path = next((group for group in resume_match.groups() if group), "")
+            topic = (topic[: resume_match.start()] + topic[resume_match.end() :]).strip()
+
+        style_match = re.search(r'--style\s+(?:"([^"]+)"|\'([^\']+)\'|(\S+))', topic)
+        if style_match is not None:
+            interview_style = next((group for group in style_match.groups() if group), "auto")
+            topic = (topic[: style_match.start()] + topic[style_match.end() :]).strip()
+
+        return topic, resume_path, interview_style
+
+    @staticmethod
+    def _parse_prep_command(content: str) -> tuple[str, str, str, str, str]:
+        command = content.strip()
+        payload = command.split(maxsplit=1)[1].strip() if " " in command else ""
+        if not payload:
+            return "", "", "", "", ""
+
+        topic = payload
+        resume_path = ""
+        company = ""
+        position = ""
+        target_description = ""
+
+        for flag, target in (
+            ("resume", "resume_path"),
+            ("company", "company"),
+            ("position", "position"),
+            ("target", "target_description"),
+        ):
+            match = re.search(rf'--{flag}\s+(?:"([^"]+)"|\'([^\']+)\'|(\S+))', topic)
+            if match is None:
+                continue
+            value = next((group for group in match.groups() if group), "")
+            if target == "resume_path":
+                resume_path = value
+            elif target == "company":
+                company = value
+            elif target == "position":
+                position = value
+            else:
+                target_description = value
+            topic = (topic[: match.start()] + topic[match.end() :]).strip()
+
+        return topic, resume_path, company, position, target_description
 
     async def _dispatch(self, msg: InboundMessage) -> None:
         """Process a message under the global lock."""
@@ -399,20 +674,39 @@ class AgentLoop:
 
             if snapshot:
                 self._schedule_background(self.memory_consolidator.archive_messages(snapshot))
+            self._interviews.pop(session.key, None)
 
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
                                   content="New session started.")
-        if cmd == "/help":
-            lines = [
-                "🐈 nanobot commands:",
-                "/new — Start a new conversation",
-                "/stop — Stop the current task",
-                "/restart — Restart the bot",
-                "/help — Show available commands",
-            ]
+        if cmd.startswith("/ingest"):
+            return await self._handle_nowcoder_ingest(msg, cmd)
+        if cmd.startswith("/recent"):
+            return await self._handle_recent_reports(msg, cmd)
+        if cmd.startswith("/digest"):
+            return await self._handle_daily_digest(msg, cmd)
+        if cmd.startswith("/prep"):
+            return await self._handle_interview_prep(msg, cmd)
+        if cmd.startswith("/interview"):
+            return await self._handle_mock_interview(msg, cmd)
+        if cmd == "/review":
+            return await self._handle_interview_review(msg, session)
+        if cmd == "/schedule_digest":
+            return await self._handle_schedule_digest(msg)
+        if cmd in {"/menu"}:
             return OutboundMessage(
-                channel=msg.channel, chat_id=msg.chat_id, content="\n".join(lines),
+                channel=msg.channel, chat_id=msg.chat_id, content=self._build_help_menu(),
             )
+        if msg.channel == "dingtalk" and self._is_first_turn(session) and self._looks_like_greeting(msg.content):
+            return OutboundMessage(
+                channel=msg.channel, chat_id=msg.chat_id, content=self._build_help_menu(),
+            )
+        if cmd == "/help":
+            return OutboundMessage(
+                channel=msg.channel, chat_id=msg.chat_id, content=self._build_help_menu(),
+            )
+        if key in self._interviews and not self._interviews[key].completed:
+            result = self._interviews[key].reply(msg.content)
+            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=result)
         await self.memory_consolidator.maybe_consolidate_by_tokens(session)
 
         self._set_tool_context(msg.channel, msg.chat_id, msg.metadata.get("message_id"))

@@ -23,3 +23,38 @@ botpy.log
 nano.*.save
 .DS_Store
 uv.lock
+
+# Local scratch / packaging
+.tmp_*/
+.tmp_wheel_check/
+.tmp_wheel_check_demo/
+
+# Local test workspaces and traces
+data/traces/
+data/vector_db/
+data/memory/
+data/_smoke_traces/
+data/_test_workspace/
+data/_pytest_tmp*/
+data/tmp*/
+
+# Local secrets / machine-specific config
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+*.local
+*.secret
+*.secrets
+secrets/
+
+# Generated knowledge-base artifacts and crawler output
+data/knowledge_base/**/Nowcoder-Agent-Reports/
+data/knowledge_base/**/question_bank.json
+data/knowledge_base/**/question_bank.md
+data/knowledge_base/**/recent_question_bank.json
+data/knowledge_base/**/recent_question_bank.md
+data/knowledge_base/**/report_index.json
+
+# Curated source markdown under data/knowledge_base is intentionally kept.

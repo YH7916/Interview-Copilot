@@ -58,6 +58,18 @@ def test_save_config_writes_context_window_tokens_but_not_memory_window(tmp_path
     assert "memoryWindow" not in defaults
 
 
+def test_load_config_accepts_utf8_bom(tmp_path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"agents": {"defaults": {"model": "gpt-5.4"}}}),
+        encoding="utf-8-sig",
+    )
+
+    config = load_config(config_path)
+
+    assert config.agents.defaults.model == "gpt-5.4"
+
+
 def test_onboard_refresh_rewrites_legacy_config_template(tmp_path, monkeypatch) -> None:
     config_path = tmp_path / "config.json"
     workspace = tmp_path / "workspace"
@@ -130,3 +142,32 @@ def test_onboard_refresh_backfills_missing_channel_fields(tmp_path, monkeypatch)
     assert result.exit_code == 0
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["channels"]["qq"]["msgFormat"] == "plain"
+
+
+def test_load_config_accepts_and_preserves_copilot_section(tmp_path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "copilot": {
+                    "textProvider": "openai",
+                    "embeddingProvider": "dashscope",
+                    "rerankProvider": "dashscope",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.copilot.text_provider == "openai"
+    assert config.copilot.embedding_provider == "dashscope"
+    assert config.copilot.rerank_provider == "dashscope"
+
+    save_config(config, config_path)
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+
+    assert saved["copilot"]["textProvider"] == "openai"
+    assert saved["copilot"]["embeddingProvider"] == "dashscope"
+    assert saved["copilot"]["rerankProvider"] == "dashscope"

@@ -1,0 +1,22 @@
+[
+  {
+    "title": "字节跳动 抖音 AI Agent开发 一面",
+    "text": "1. 提示词模板是怎么构建的？\n2. 单Agent还是多Agent的？\n3. RAG 在项目里怎么做？",
+    "expected_keep": true
+  },
+  {
+    "title": "2026春招启动，欢迎投递",
+    "text": "Agent 岗位大量招聘，欢迎投递，内推直达。",
+    "expected_keep": false
+  },
+  {
+    "title": "快手 AI Agent开发 二面",
+    "text": "剩余60%内容，订阅专栏后可继续查看，也可单篇购买。",
+    "expected_keep": false
+  },
+  {
+    "title": "科大讯飞 AI Agent 二面",
+    "text": "1. Agent 和传统聊天机器人最大的区别是什么？\n2. Function Calling 的本质是什么？",
+    "expected_keep": true
+  }
+]

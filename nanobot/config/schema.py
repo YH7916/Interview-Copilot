@@ -151,11 +151,20 @@ class ToolsConfig(Base):
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 
 
+class CopilotConfig(Base):
+    """Lightweight copilot routing preferences stored in the shared config."""
+
+    text_provider: str | None = None
+    embedding_provider: str | None = None
+    rerank_provider: str | None = None
+
+
 class Config(BaseSettings):
     """Root configuration for nanobot."""
 
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
+    copilot: CopilotConfig = Field(default_factory=CopilotConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)

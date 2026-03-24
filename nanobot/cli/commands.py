@@ -704,8 +704,6 @@ def agent(
 
         asyncio.run(run_once())
     else:
-        # Interactive mode — route through bus like other channels
-        from nanobot.bus.events import InboundMessage
         _init_prompt_session()
         console.print(f"{__logo__} Interactive mode (type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit)\n")
 
@@ -731,39 +729,6 @@ def agent(
             signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
         async def run_interactive():
-            bus_task = asyncio.create_task(agent_loop.run())
-            turn_done = asyncio.Event()
-            turn_done.set()
-            turn_response: list[str] = []
-
-            async def _consume_outbound():
-                while True:
-                    try:
-                        msg = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
-                        if msg.metadata.get("_progress"):
-                            is_tool_hint = msg.metadata.get("_tool_hint", False)
-                            ch = agent_loop.channels_config
-                            if ch and is_tool_hint and not ch.send_tool_hints:
-                                pass
-                            elif ch and not is_tool_hint and not ch.send_progress:
-                                pass
-                            else:
-                                await _print_interactive_progress_line(msg.content, _thinking)
-
-                        elif not turn_done.is_set():
-                            if msg.content:
-                                turn_response.append(msg.content)
-                            turn_done.set()
-                        elif msg.content:
-                            await _print_interactive_response(msg.content, render_markdown=markdown)
-
-                    except asyncio.TimeoutError:
-                        continue
-                    except asyncio.CancelledError:
-                        break
-
-            outbound_task = asyncio.create_task(_consume_outbound())
-
             try:
                 while True:
                     try:
@@ -778,24 +743,20 @@ def agent(
                             console.print("\nGoodbye!")
                             break
 
-                        turn_done.clear()
-                        turn_response.clear()
-
-                        await bus.publish_inbound(InboundMessage(
-                            channel=cli_channel,
-                            sender_id="user",
-                            chat_id=cli_chat_id,
-                            content=user_input,
-                        ))
-
                         nonlocal _thinking
                         _thinking = _ThinkingSpinner(enabled=not logs)
                         with _thinking:
-                            await turn_done.wait()
+                            response = await agent_loop.process_direct(
+                                user_input,
+                                session_key=session_id,
+                                channel=cli_channel,
+                                chat_id=cli_chat_id,
+                                on_progress=_cli_progress,
+                            )
                         _thinking = None
 
-                        if turn_response:
-                            _print_agent_response(turn_response[0], render_markdown=markdown)
+                        if response:
+                            _print_agent_response(response, render_markdown=markdown)
                     except KeyboardInterrupt:
                         _restore_terminal()
                         console.print("\nGoodbye!")
@@ -805,12 +766,107 @@ def agent(
                         console.print("\nGoodbye!")
                         break
             finally:
-                agent_loop.stop()
-                outbound_task.cancel()
-                await asyncio.gather(bus_task, outbound_task, return_exceptions=True)
                 await agent_loop.close_mcp()
 
         asyncio.run(run_interactive())
+
+
+@app.command("interview-agent")
+def interview_agent(
+    message: str = typer.Option(None, "--message", "-m", help="Message to send to the agent"),
+    session_id: str = typer.Option("cli:direct", "--session", "-s", help="Session ID"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+    markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
+    logs: bool = typer.Option(False, "--logs/--no-logs", help="Show nanobot runtime logs during chat"),
+):
+    """Start the interview copilot chat directly."""
+    agent(
+        message=message,
+        session_id=session_id,
+        workspace=workspace,
+        config=config,
+        markdown=markdown,
+        logs=logs,
+    )
+
+
+def launch_interview_agent() -> None:
+    """Console-script entrypoint for the interview chat alias."""
+    app(args=["interview-agent", *sys.argv[1:]], prog_name="interview-agent")
+
+
+def launch_interview_gateway() -> None:
+    """Console-script entrypoint for the gateway alias."""
+    app(args=["gateway", *sys.argv[1:]], prog_name="interview-gateway")
+
+
+@app.command("interview-demo")
+def interview_demo(
+    host: str = typer.Option("127.0.0.1", "--host", help="Demo server host"),
+    port: int = typer.Option(18820, "--port", "-p", help="Demo server port"),
+    open_browser: bool = typer.Option(False, "--open-browser", help="Open the demo page in a browser"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+    logs: bool = typer.Option(False, "--logs/--no-logs", help="Show nanobot runtime logs"),
+):
+    """Launch the thin web demo for Interview Copilot."""
+    from loguru import logger
+
+    from copilot.demo_server import DemoRuntime, run_demo_server
+    from nanobot.agent.loop import AgentLoop
+    from nanobot.bus.queue import MessageBus
+    from nanobot.config.paths import get_cron_dir
+    from nanobot.cron.service import CronService
+
+    config = _load_runtime_config(config, workspace)
+    _print_deprecated_memory_window_notice(config)
+    sync_workspace_templates(config.workspace_path)
+
+    bus = MessageBus()
+    provider = _make_provider(config)
+    cron_store_path = get_cron_dir() / "jobs.json"
+    cron = CronService(cron_store_path)
+
+    if logs:
+        logger.enable("nanobot")
+    else:
+        logger.disable("nanobot")
+
+    agent_loop = AgentLoop(
+        bus=bus,
+        provider=provider,
+        workspace=config.workspace_path,
+        model=config.agents.defaults.model,
+        max_iterations=config.agents.defaults.max_tool_iterations,
+        context_window_tokens=config.agents.defaults.context_window_tokens,
+        web_search_config=config.tools.web.search,
+        web_proxy=config.tools.web.proxy or None,
+        exec_config=config.tools.exec,
+        cron_service=cron,
+        restrict_to_workspace=config.tools.restrict_to_workspace,
+        mcp_servers=config.tools.mcp_servers,
+        channels_config=config.channels,
+    )
+
+    runtime = DemoRuntime(
+        agent_loop=agent_loop,
+        model=config.agents.defaults.model,
+    )
+    try:
+        run_demo_server(
+            runtime=runtime,
+            host=host,
+            port=port,
+            open_browser=open_browser,
+        )
+    finally:
+        asyncio.run(agent_loop.close_mcp())
+
+
+def launch_interview_demo() -> None:
+    """Console-script entrypoint for the demo web UI."""
+    app(args=["interview-demo", *sys.argv[1:]], prog_name="interview-demo")
 
 
 # ============================================================================

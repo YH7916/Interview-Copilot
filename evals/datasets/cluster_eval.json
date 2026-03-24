@@ -1,0 +1,18 @@
+[
+  {
+    "question": "什么是 ReAct？",
+    "expected_category": "agent_architecture"
+  },
+  {
+    "question": "RAG 的召回和重排链路怎么设计？",
+    "expected_category": "rag_retrieval"
+  },
+  {
+    "question": "提示词模板是怎么构建的？",
+    "expected_category": "prompt_context"
+  },
+  {
+    "question": "Python 为什么会有 GIL？",
+    "expected_category": "python_system"
+  }
+]

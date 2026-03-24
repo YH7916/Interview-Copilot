@@ -1,7 +1,7 @@
-"""TriggerReviewTool — 让面试官 bot 在对话结束时主动触发 Review Agent。"""
+"""Tool for triggering post-interview review in the background."""
+
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
@@ -11,10 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class TriggerReviewTool(Tool):
-    """
-    面试官 bot 在单轮模拟面试结束后调用此 tool，
-    后台异步分析对话历史并更新错题本。
-    """
+    """Ask copilot to summarize weak points after an interview session."""
 
     def __init__(self) -> None:
         self._history: list[dict] = []
@@ -26,8 +23,8 @@ class TriggerReviewTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "在单轮模拟面试结束时调用。后台自动分析本次对话，"
-            "提取候选人薄弱点并更新错题本（weakness_log.md）。"
+            "Trigger a background interview review. The tool analyzes the current "
+            "dialogue history and prepares a review summary for later practice."
         )
 
     @property
@@ -37,24 +34,28 @@ class TriggerReviewTool(Tool):
             "properties": {
                 "session_summary": {
                     "type": "string",
-                    "description": "本次面试的一句话简短总结，如'候选人完成了 RAG 和并发编程两个专题的模拟面试'",
+                    "description": "Short summary of the interview session.",
                 }
             },
             "required": ["session_summary"],
         }
 
     def set_history(self, messages: list[dict]) -> None:
-        """由 AgentLoop 在每轮结束时注入当前对话历史。"""
         self._history = messages
 
     async def execute(self, session_summary: str, **kwargs: Any) -> str:
         try:
-            from copilot.memory.review_agent import ReviewAgent
-            agent = ReviewAgent()
-            # 启动后台任务，不阻塞当前对话
-            asyncio.create_task(agent._analyze_async(list(self._history)))
+            from copilot.app import trigger_background_review
+
+            trigger_background_review(self._history)
             logger.info("ReviewAgent triggered: %s", session_summary)
-            return f"✅ 已触发面试复盘分析：{session_summary}\n错题本将在后台自动更新。"
-        except Exception as e:
-            logger.warning("TriggerReviewTool failed: %s", e)
-            return f"⚠️ 复盘触发失败（{e}），请手动运行 `python evals/run_eval.py`。"
+            return (
+                f"Triggered interview review: {session_summary}\n"
+                "A background review task is now running."
+            )
+        except Exception as exc:
+            logger.warning("TriggerReviewTool failed: %s", exc)
+            return (
+                f"Failed to trigger interview review ({exc}). "
+                "Run `python evals/run_eval.py` manually if needed."
+            )

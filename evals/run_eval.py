@@ -1,177 +1,302 @@
-"""
-LLMOps 自动化评测流水线 (LLM-as-a-Judge)
-架构：
-  1. copilot.rag 检索相关知识 (RAG)
-  2. Qwen 基于检索结果生成回答 (Generator)
-  3. Qwen 作为严苛裁判对回答打分 (Judge)
-"""
-import asyncio
+"""Focused evaluation suites for the current Interview Harness."""
+
+from __future__ import annotations
+
+import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any, Callable
 
-from copilot.rag.hybrid_retriever import HybridRetriever
-
-# 确保项目根目录在 Python PATH 内，copilot/ 包才能正常导入
 BASE_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(BASE_DIR))
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
-import dashscope
-from dotenv import load_dotenv
-from copilot.config import get_dashscope_api_key
-from copilot.memory.weakness_tracker import WeaknessTracker
+from copilot.config import get_text_settings
+from copilot.interview.evaluation import evaluate_answer as evaluate_against_reference
+from copilot.interview.policy import should_follow_up
+from copilot.knowledge.question_bank import classify_question
+from copilot.llm import call_text, parse_json_response
+from copilot.sources.nowcoder import FetchedPage, SearchHit, analyze_page, is_preferred_page
 
-load_dotenv(BASE_DIR / ".env")
+DATASETS_DIR = BASE_DIR / "evals" / "datasets"
+DEFAULT_DATASETS = {
+    "ingest": DATASETS_DIR / "ingest_eval.json",
+    "cluster": DATASETS_DIR / "cluster_eval.json",
+    "interview_policy": DATASETS_DIR / "interview_policy_eval.json",
+    "review": DATASETS_DIR / "review_eval.json",
+}
 
-# ==========================================
-# 配置：从 .env 或 ~/.nanobot/config.json 读取 API Key
-# ==========================================
-dashscope.api_key = get_dashscope_api_key()
-if not dashscope.api_key:
-    print("⚠️ 未找到 DASHSCOPE_API_KEY，请在 .env 或 ~/.nanobot/config.json 中配置。")
-
-DATASET_PATH = BASE_DIR / "evals" / "datasets" / "golden_set.json"
+JudgeFn = Callable[[str], str]
 
 
-# ==========================================
-# 亮点 1: RAG Pipeline — 用 copilot.rag 检索 + Qwen 生成答案
-# 直接复用 copilot 层的 RAG 引擎，不造轮子，不污染 nanobot
-# ==========================================
-def ask_agent_with_rag(question: str) -> tuple[str, list[dict]]:
-    """用 copilot RAG 检索上下文，再用 Qwen 生成专业回答"""
-    results: list[dict] = []
-    try:
-        retriever = HybridRetriever()
-        results = asyncio.run(retriever.search(question, top_k_retrieve=5, top_n_rerank=2))
-        docs = [r.get("text", "") for r in results]
-        context = "\n\n".join(docs) if docs else "（未检索到相关资料）"
-    except Exception as e:
-        context = f"（RAG 检索失败: {e}）"
+def load_dataset(path: Path) -> list[dict[str, Any]]:
+    return json.loads(path.read_text(encoding="utf-8"))
 
-    prompt = f"""你是一个 AI 面试辅导 Agent。请基于以下参考资料，简明准确地回答面试问题。
-如果资料不足，也可以结合自身知识补充，但不要编造不存在的概念。
 
-【参考资料】
-{context}
+def call_text_model(prompt: str, *, task: str) -> str:
+    return call_text(prompt, task=task)
 
-【面试问题】
-{question}
 
-请直接给出回答："""
+def compute_recall(retrieved_sources: set[str], expected_sources: set[str]) -> float | None:
+    if not expected_sources:
+        return None
+    return len(retrieved_sources & expected_sources) / len(expected_sources)
 
-    try:
-        response = dashscope.Generation.call(
-            model="qwen-max", prompt=prompt, result_format="text"
+
+def run_ingest_eval(dataset: list[dict[str, Any]]) -> dict[str, Any]:
+    records = []
+    for sample in dataset:
+        page = _make_eval_page(sample)
+        report = analyze_page(page)
+        predicted_keep = report is not None and is_preferred_page(page)
+        records.append(
+            {
+                "title": sample["title"],
+                "expected_keep": bool(sample["expected_keep"]),
+                "predicted_keep": predicted_keep,
+                "matched": predicted_keep is bool(sample["expected_keep"]),
+            }
         )
-        return response.output.text.strip(), results
-    except Exception as e:
-        return f"[生成回答失败: {e}]", []
+    return _finalize_suite("ingest", records)
 
 
-# ==========================================
-# 亮点 2: LLM-as-a-Judge — 结构化双维度打分
-# ==========================================
-JUDGE_PROMPT = """
-你是一个极其严苛的高级 AI 面试官。请对候选人 AI Agent 的回答质量进行评估。
+def run_cluster_eval(dataset: list[dict[str, Any]]) -> dict[str, Any]:
+    records = []
+    for sample in dataset:
+        predicted = classify_question(sample["question"])
+        records.append(
+            {
+                "question": sample["question"],
+                "expected_category": sample["expected_category"],
+                "predicted_category": predicted,
+                "matched": predicted == sample["expected_category"],
+            }
+        )
+    return _finalize_suite("cluster", records)
 
-【评估标准】（1-5分）
-1. 准确性 (Accuracy)：是否包含标准答案的核心知识点？是否有技术事实错误？
-2. 幻觉控制 (Faithfulness)：是否过度发散或编造了错误概念？
 
-【数据】
-- 问题：{question}
-- 标准答案：{expected_answer}
-- Agent 回答：{actual_answer}
+def run_interview_policy_eval(dataset: list[dict[str, Any]]) -> dict[str, Any]:
+    records = []
+    for sample in dataset:
+        predicted = should_follow_up(
+            has_follow_ups=bool(sample.get("has_follow_ups", True)),
+            answer_text=sample["answer"],
+            depth_score=int(sample["depth_score"]),
+            evidence_score=int(sample["evidence_score"]),
+            overall_score=float(sample["overall_score"]),
+        )
+        records.append(
+            {
+                "name": sample["name"],
+                "expected_follow_up": bool(sample["expected_follow_up"]),
+                "predicted_follow_up": predicted,
+                "matched": predicted is bool(sample["expected_follow_up"]),
+            }
+        )
+    return _finalize_suite("interview_policy", records)
 
-【输出要求】严格输出合法 JSON，无 Markdown：
-{{"accuracy_score": <1-5>, "faithfulness_score": <1-5>, "reason": "<简要点评>"}}
-"""
 
-def evaluate_answer(question: str, expected: str, actual: str) -> dict:
-    """调用 Qwen 作为裁判打分"""
-    prompt = JUDGE_PROMPT.format(
-        question=question, expected_answer=expected, actual_answer=actual
+def run_review_eval(
+    dataset: list[dict[str, Any]],
+    *,
+    judge_mode: str = "auto",
+) -> dict[str, Any]:
+    records = []
+    judge_fn, mode_used = _build_review_judge(judge_mode, dataset)
+    for sample in dataset:
+        result = evaluate_against_reference(
+            question=sample["question"],
+            expected_answer=sample["expected_answer"],
+            actual_answer=sample["actual_answer"],
+            pitfalls=list(sample.get("pitfalls", [])),
+            judge_fn=judge_fn,
+        )
+        expected_min = int(sample.get("expected_min_accuracy", 1))
+        records.append(
+            {
+                "question": sample["question"],
+                "expected_min_accuracy": expected_min,
+                "predicted_accuracy": int(result["accuracy_score"]),
+                "matched": int(result["accuracy_score"]) >= expected_min,
+                "reason": result["reason"],
+            }
+        )
+    suite = _finalize_suite("review", records)
+    suite["judge_mode"] = mode_used
+    return suite
+
+
+def run_suite(name: str, *, judge_mode: str = "auto") -> dict[str, Any]:
+    dataset = load_dataset(DEFAULT_DATASETS[name])
+    if name == "ingest":
+        return run_ingest_eval(dataset)
+    if name == "cluster":
+        return run_cluster_eval(dataset)
+    if name == "interview_policy":
+        return run_interview_policy_eval(dataset)
+    if name == "review":
+        return run_review_eval(dataset, judge_mode=judge_mode)
+    raise ValueError(f"Unknown eval suite: {name}")
+
+
+def run_all_suites(*, judge_mode: str = "auto") -> dict[str, Any]:
+    suites = [run_suite(name, judge_mode=judge_mode) for name in DEFAULT_DATASETS]
+    total = sum(item["summary"]["total"] for item in suites)
+    passed = sum(item["summary"]["passed"] for item in suites)
+    return {
+        "suites": suites,
+        "summary": {
+            "total": total,
+            "passed": passed,
+            "accuracy": round(passed / total, 3) if total else 0.0,
+        },
+    }
+
+
+def print_report(report: dict[str, Any]) -> None:
+    if "suites" in report:
+        print("Interview Harness Eval Report")
+        for suite in report["suites"]:
+            _print_suite(suite)
+        print("=" * 40)
+        print(
+            f"overall: {report['summary']['passed']}/{report['summary']['total']} "
+            f"({report['summary']['accuracy']:.1%})"
+        )
+        return
+    _print_suite(report)
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run focused evaluation suites for Interview Copilot.")
+    parser.add_argument(
+        "--suite",
+        choices=["all", *DEFAULT_DATASETS.keys()],
+        default="all",
+        help="Evaluation suite to run.",
     )
-    try:
-        response = dashscope.Generation.call(
-            model="qwen-max", prompt=prompt, result_format="text"
-        )
-        text = response.output.text.strip().strip("```json").strip("```").strip()
-        return json.loads(text)
-    except Exception as e:
-        print(f"⚠️ 裁判打分失败: {e}")
-        return {"accuracy_score": 0, "faithfulness_score": 0, "reason": "裁判系统异常"}
+    parser.add_argument(
+        "--judge-mode",
+        choices=["auto", "local", "model"],
+        default="auto",
+        help="Judge mode for review_eval.",
+    )
+    parser.add_argument("--json", action="store_true", help="Print JSON instead of human-readable text.")
+    return parser
 
 
-# ==========================================
-# 亮点 3: CI/CD 评测流水线 — RAG Agent vs. Judge
-# ==========================================
-def run_evaluation_pipeline():
-    print("🚀 启动 LLMOps 自动化评测流水线 (RAG + LLM-as-a-Judge)...")
+def main(argv: list[str] | None = None) -> int:
+    args = build_arg_parser().parse_args(argv)
+    report = (
+        run_all_suites(judge_mode=args.judge_mode)
+        if args.suite == "all"
+        else run_suite(args.suite, judge_mode=args.judge_mode)
+    )
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        print_report(report)
+    return 0
 
-    dataset = json.loads(DATASET_PATH.read_text(encoding="utf-8"))
-    total_accuracy = total_faithfulness = 0
-    total_recall = 0.0
-    recall_count = 0
 
-    print("⏳ 正在让 Agent 作答并交由 AI 裁判打分，请稍候...\n")
+def _make_eval_page(sample: dict[str, Any]) -> FetchedPage:
+    url = sample.get("url", "https://www.nowcoder.com/discuss/eval")
+    return FetchedPage(
+        hit=SearchHit(query="eval", title=sample["title"], url=url, snippet=sample.get("snippet", "")),
+        canonical_url=url,
+        title=sample["title"],
+        text=sample["text"],
+        updated_at=sample.get("updated_at", "2099-01-01T00:00:00"),
+        like_count=int(sample.get("like_count", 0)),
+        comment_count=int(sample.get("comment_count", 0)),
+        view_count=int(sample.get("view_count", 0)),
+    )
 
-    eval_records: list[dict] = []
 
-    for i, data in enumerate(dataset, 1):
-        question, expected = data["question"], data["expected_answer"]
+def _build_review_judge(judge_mode: str, dataset: list[dict[str, Any]]) -> tuple[JudgeFn, str]:
+    if judge_mode == "local":
+        return _local_review_judge(dataset), "local"
+    if judge_mode == "model":
+        return lambda prompt: call_text_model(prompt, task="judge"), "model"
 
-        print(f"[{i}/{len(dataset)}] 评测中: {question}")
-        agent_answer, rag_results = ask_agent_with_rag(question)
-        retrieved_sources = {r.get("metadata", {}).get("source", "") for r in rag_results}
-        expected_sources = set(data.get("expected_sources", []))
-        recall = len(retrieved_sources & expected_sources) / len(expected_sources) if expected_sources else None
-        if recall is not None:
-            total_recall += recall
-            recall_count += 1
+    settings = get_text_settings("judge")
+    if settings.get("api_key"):
+        return lambda prompt: call_text_model(prompt, task="judge"), "model"
+    return _local_review_judge(dataset), "local"
 
-        preview = agent_answer[:80] + "..." if len(agent_answer) > 80 else agent_answer
-        print(f"  📝 Agent: {preview}")
-        if recall is not None:
-            print(f"  🔍 Recall@K: {recall:.2f}")
 
-        result = evaluate_answer(question, expected, agent_answer)
-        print(f"  👉 准确性: {result.get('accuracy_score')}/5  幻觉控制: {result.get('faithfulness_score')}/5")
-        print(f"  🗣️  点评: {result.get('reason')}\n")
+def _local_review_judge(dataset: list[dict[str, Any]]) -> JudgeFn:
+    lookup = {sample["question"]: sample for sample in dataset}
 
-        total_accuracy += result.get("accuracy_score", 0)
-        total_faithfulness += result.get("faithfulness_score", 0)
-        eval_records.append({
-            "question": question,
-            "expected": expected,
-            "actual": agent_answer,
-            "accuracy_score": result.get("accuracy_score", 0),
-            "faithfulness_score": result.get("faithfulness_score", 0),
-            "reason": result.get("reason", ""),
-            "recall_at_k": recall,
-            "retrieved_sources": sorted(s for s in retrieved_sources if s),
-            "expected_sources": sorted(expected_sources),
-            "rag_results": rag_results,
-        })
+    def _judge(prompt: str) -> str:
+        question = _extract_between(prompt, "- 问题：", "- 参考答案：")
+        answer = _extract_after(prompt, "- 候选人回答：")
+        sample = lookup.get(question, {})
+        keywords = [str(item).lower() for item in sample.get("expected_keywords", [])]
+        lowered = answer.lower()
+        hit_count = sum(1 for keyword in keywords if keyword and keyword in lowered)
+        ratio = hit_count / max(len(keywords), 1)
+        if ratio >= 0.8:
+            score = 5
+        elif ratio >= 0.6:
+            score = 4
+        elif ratio >= 0.4:
+            score = 3
+        elif ratio >= 0.2:
+            score = 2
+        else:
+            score = 1
+        payload = {
+            "accuracy_score": score,
+            "clarity_score": max(1, min(5, score)),
+            "depth_score": max(1, min(5, score)),
+            "evidence_score": max(1, min(5, score - (0 if len(answer) >= 40 else 1))),
+            "structure_score": max(1, min(5, score)),
+            "reason": f"local judge matched {hit_count}/{max(len(keywords), 1)} expected keywords",
+        }
+        return json.dumps(payload, ensure_ascii=False)
 
-    n = len(dataset)
+    return _judge
+
+
+def _extract_between(text: str, start_marker: str, end_marker: str) -> str:
+    start = text.find(start_marker)
+    end = text.find(end_marker, start + len(start_marker))
+    if start < 0 or end < 0:
+        return ""
+    return text[start + len(start_marker):end].strip()
+
+
+def _extract_after(text: str, marker: str) -> str:
+    start = text.find(marker)
+    return text[start + len(marker):].strip() if start >= 0 else ""
+
+
+def _finalize_suite(name: str, records: list[dict[str, Any]]) -> dict[str, Any]:
+    total = len(records)
+    passed = sum(1 for record in records if record["matched"])
+    return {
+        "suite": name,
+        "summary": {
+            "total": total,
+            "passed": passed,
+            "accuracy": round(passed / total, 3) if total else 0.0,
+        },
+        "records": records,
+    }
+
+
+def _print_suite(suite: dict[str, Any]) -> None:
+    summary = suite["summary"]
+    extra = f" | judge={suite['judge_mode']}" if "judge_mode" in suite else ""
     print("=" * 40)
-    print("📊 评测报告 (Metrics Summary)")
-    print(f"🎯 平均准确性  (Accuracy):    {total_accuracy/n:.1f} / 5.0")
-    print(f"🛡️  平均无幻觉率 (Faithfulness): {total_faithfulness/n:.1f} / 5.0")
-    if recall_count > 0:
-        print(f"🔍 平均检索召回率 (Recall@K): {total_recall/recall_count:.2f}")
-    print("=" * 40)
-
-    # ==========================================
-    # 亮点 4: 自动更新长期记忆 — 错题本
-    # 面试可吹: 系统有自学习能力，每次跑完评测自动沉淀薄弱点
-    # ==========================================
-    print("\n📝 正在更新错题本 (weakness_log.md)...")
-    tracker = WeaknessTracker()
-    tracker.update(eval_records)
-    print(f"✅ 错题本已更新: {tracker.log_path}")
+    print(f"{suite['suite']}{extra}")
+    print(f"passed: {summary['passed']}/{summary['total']} ({summary['accuracy']:.1%})")
+    for record in suite["records"][:5]:
+        label = next((record.get(key) for key in ("title", "question", "name") if record.get(key)), "sample")
+        print(f"- {label}: {'ok' if record['matched'] else 'fail'}")
 
 
 if __name__ == "__main__":
-    run_evaluation_pipeline()
+    raise SystemExit(main())

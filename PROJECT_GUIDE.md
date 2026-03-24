@@ -1,53 +1,70 @@
-# Interview-Copilot：架构设计与面试深度解析
+# Project Guide
 
-> **项目定位**：基于 nanobot 框架二次开发的“面试专家型”AI Agent。通过高质量 RAG 检索和自动化评测体系，解决 AI 辅助面试中的“幻觉问题”与“知识深度”痛点。
+## Working Positioning
 
----
+This repository should now be treated as:
 
-## 🏗️ 核心架构：关注点分离 (Separation of Concerns)
+- `nanobot/`: reusable runtime host
+- `copilot/`: interview preparation harness
 
-项目严格分为两层结构，确保了系统的可扩展性和框架的纯净度：
+When making future changes, keep the split clear:
 
-### 1. nanobot (底层引擎)
-*   **职责**：负责 Agent Loop（思考-行动循环）、消息总线（Bus）、工具注册（Registry）和上下文管理。
-*   **设计原则**：保持通用性，不包含任何业务代码。
+- `nanobot` owns generic runtime capabilities
+- `copilot` owns interview-domain logic
 
-### 2. copilot (业务特化层)
-*   **职责**：封装所有面试业务逻辑。
-*   **目录结构**：
-    *   `rag/`：向量数据库配置（ChromaDB）与检索逻辑。
-    *   `memory/`：面试专属记忆（如薄弱点追踪）。
-    *   `tools/`：面向面试场景自定义的 AI 工具（如查八股、查面经）。
+## Product Spine
 
----
+The main workflow is:
 
-## 🛠️ 技术亮点：LLMOps 评测流水线 (`evals/`)
+1. collect and normalize fresh interview materials
+2. build local question-bank and answer-card assets
+3. generate a prep pack from resume + target role
+4. run a project-centric mock interview
+5. review answers
+6. generate the next drill list
 
-这是面试时最能体现你**工程专业度**的地方。我们没有盲目地调优 Prompt，而是先造了一把“尺子”。
+Default runtime mode is a single online interviewer agent. Retrieval and state guide the session, but the LLM owns phrasing, clarification, and follow-up flow.
 
-### LLM-as-a-Judge 机制
-*   **数据集**：在 `evals/datasets/golden_set.json` 中预定义了行业标准回答（Ground Truth）。
-*   **打分模型**：调用 Qwen-Max 作为“面试官裁判”，从 **准确性 (Accuracy)** 和 **幻觉率 (Faithfulness)** 两个维度对 Agent 随机回答进行量化打分。
-*   **价值**：实现了开发过程的闭环。每次修改 RAG 逻辑或 Prompt 后，运行 `run_eval.py` 即可量化判断模型是变聪明了还是变笨了。
+## Keep
 
----
+- explicit runtime state
+- a single-agent live interview loop
+- retrieval-backed grounding
+- traceable artifacts
+- small, inspectable modules
+- thin nanobot-to-copilot adapters
 
-## 🔍 RAG 深度优化 (`copilot/rag/`)
+## Avoid
 
-*   **向量库选择**：使用轻量级、响应快的 **ChromaDB** 实现本地化语义存储。
-*   **检索策略**：
-    *   **Chunking**：针对 Markdown 知识库进行了基于段落的智能分块。
-    *   **Embedding**：采用阿里云 text-embedding-v3 模型，解决了传统搜索“搜 LLM 匹配不到大语言模型”的语义断层。
+- rebuilding a second generic memory system in `copilot`
+- letting question-bank retrieval turn into a rigid scripted interviewer
+- hiding runtime control in prompts only
+- large multi-agent abstractions without a clear need
+- adding product/UI complexity before strengthening harness quality
 
----
+## Stable Entry Points
 
-## 🎙️ 面试口述参考 (Tips for Interview)
+- [copilot/app.py](copilot/app.py)
+- [copilot/prep.py](copilot/prep.py)
+- [copilot/interview/orchestrator.py](copilot/interview/orchestrator.py)
+- [copilot/interview/trace.py](copilot/interview/trace.py)
+- [nanobot/agent/loop.py](nanobot/agent/loop.py)
 
-**问：你在项目中解决了什么技术难点？**
-> “我解决了 AI Agent 在特定领域（如面试问答）下的**幻觉率控制**问题。我没有依赖基础的大模型能力，而是搭建了一套 **RAG 闭环评测体系**。通过手写的 ChromaDB 检索引擎注入专业知识，并利用 **LLM-as-a-Judge** 建立起量化测试集，通过数据回环持续优化 Agent 的回答质量，最终将技术类回答的准确度从原始模型的感性认知提升到了工业级的可靠水平。”
+## Main Commands
 
----
+```text
+/ingest 7
+/recent 7
+/digest 1
+/prep agent --resume "D:\resume\CV.typ" --company ByteDance --position "AI Agent Intern"
+/interview agent --resume "D:\resume\CV.typ"
+/review
+```
 
-## 🚀 后续扩展 (Future Work)
-- **记忆闭环**：落地 WeaknessTracker（错题本），让 Agent 能够根据历史面试表现自动聚焦用户的薄弱环节。
-- **多轮 Agent 协同**：引入 Reviewer Agent 对主 Agent 的回答进行二次实时校对。
+## Packaging Docs
+
+- [README.md](README.md)
+- [INTERVIEW_COPILOT_ARCHITECTURE.md](docs/INTERVIEW_COPILOT_ARCHITECTURE.md)
+- [INTERVIEW_COPILOT_MEMORY.md](docs/INTERVIEW_COPILOT_MEMORY.md)
+- [INTERVIEW_COPILOT_RESUME.md](docs/INTERVIEW_COPILOT_RESUME.md)
+- [INTERVIEW_COPILOT_ROADMAP.md](docs/INTERVIEW_COPILOT_ROADMAP.md)

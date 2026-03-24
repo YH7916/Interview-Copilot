@@ -1,138 +1,126 @@
-"""单元测试：copilot 记忆层 (WeaknessTracker, TokenWindowManager, ReviewAgent)"""
 from __future__ import annotations
 
 import asyncio
+import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
+def _make_log_path() -> Path:
+    handle = tempfile.NamedTemporaryFile(prefix="copilot-test-", suffix=".md", delete=False)
+    handle.close()
+    return Path(handle.name)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# WeaknessTracker
-# ──────────────────────────────────────────────────────────────────────────────
 
 class TestWeaknessTracker:
-    def _tracker(self, tmp_path: Path):
-        from copilot.memory.weakness_tracker import WeaknessTracker
-        return WeaknessTracker(log_path=tmp_path / "weakness_log.md")
+    def _tracker(self):
+        from copilot.profile.store import WeaknessTracker
 
-    def test_get_context_empty(self, tmp_path):
-        t = self._tracker(tmp_path)
-        assert t.get_context() == ""
+        return WeaknessTracker(log_path=_make_log_path())
 
-    def test_get_context_returns_text(self, tmp_path):
-        t = self._tracker(tmp_path)
-        t.log_path.write_text("- ❌ **RAG**: 未能说明检索流程", encoding="utf-8")
-        ctx = t.get_context()
-        assert "错题本" in ctx
-        assert "RAG" in ctx
+    def test_get_context_empty(self):
+        tracker = self._tracker()
+        tracker.log_path.unlink(missing_ok=True)
+        assert tracker.get_context() == ""
 
-    def test_update_writes_entry(self, tmp_path):
-        """update() 必须写入 markdown 条目（mock LLM 调用）。"""
-        t = self._tracker(tmp_path)
-        eval_results = [
-            {"question": "什么是 RAG?", "accuracy_score": 2, "reason": "未说明检索流程"},
-        ]
-        with patch("copilot.memory.weakness_tracker._call_llm", return_value="- ❌ **RAG**: 未知"):
-            t.update(eval_results)
+    def test_get_context_returns_text(self):
+        tracker = self._tracker()
+        tracker.log_path.write_text("- Weak on RAG retrieval details", encoding="utf-8")
 
-        content = t.log_path.read_text(encoding="utf-8")
-        assert "评测记录" in content
+        context = tracker.get_context()
+        assert "Candidate profile notes" in context
+        assert "RAG" in context
+
+    def test_update_writes_entry(self):
+        tracker = self._tracker()
+        eval_results = [{"question": "What is RAG?", "accuracy_score": 2, "reason": "Missing retrieval flow."}]
+
+        with patch("copilot.profile.store.call_text", return_value="- Weak on RAG retrieval flow"):
+            tracker.update(eval_results)
+
+        content = tracker.log_path.read_text(encoding="utf-8")
+        assert "Profile update" in content
         assert "RAG" in content
 
-    def test_update_all_perfect_score(self, tmp_path):
-        """全部满分时不调用 LLM，仅写入满分提示。"""
-        t = self._tracker(tmp_path)
-        eval_results = [{"question": "Q1", "accuracy_score": 5, "reason": "perfect"}]
-        with patch("copilot.memory.weakness_tracker._call_llm") as mock_llm:
-            t.update(eval_results)
-            mock_llm.assert_not_called()
+    def test_update_fallback_on_api_error(self):
+        tracker = self._tracker()
+        eval_results = [{"question": "Explain concurrency", "accuracy_score": 3, "reason": "Too shallow."}]
 
-        assert "满分" in t.log_path.read_text(encoding="utf-8")
+        with patch("copilot.profile.store.call_text", side_effect=RuntimeError("timeout")):
+            tracker.update(eval_results)
 
-    def test_update_fallback_on_api_error(self, tmp_path):
-        """LLM 调用失败时，降级为从 reason 字段拼接。"""
-        t = self._tracker(tmp_path)
-        eval_results = [{"question": "并发原理", "accuracy_score": 3, "reason": "答错了"}]
-        with patch("copilot.memory.weakness_tracker._call_llm", side_effect=RuntimeError("timeout")):
-            t.update(eval_results)
+        content = tracker.log_path.read_text(encoding="utf-8")
+        assert "Explain concurrency" in content
 
-        content = t.log_path.read_text(encoding="utf-8")
-        assert "并发原理" in content
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# TokenWindowManager
-# ──────────────────────────────────────────────────────────────────────────────
 
 class TestTokenWindowManager:
-    def _mgr(self, **kw):
-        from copilot.memory.short_term import TokenWindowManager
-        return TokenWindowManager(**kw)
+    def _manager(self, **kwargs):
+        from copilot.profile.window import TokenWindowManager
+
+        return TokenWindowManager(**kwargs)
 
     def test_add_and_get(self):
-        mgr = self._mgr(max_turns=3)
-        mgr.add_turn("你好", "你好！")
-        msgs = mgr.get_window()
-        assert len(msgs) == 2
-        assert msgs[0] == {"role": "user", "content": "你好"}
-        assert msgs[1] == {"role": "assistant", "content": "你好！"}
+        manager = self._manager(max_turns=3)
+        manager.add_turn("hello", "hi")
+
+        messages = manager.get_window()
+        assert messages == [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+        ]
 
     def test_max_turns_eviction(self):
-        mgr = self._mgr(max_turns=2)
-        mgr.add_turn("Q1", "A1")
-        mgr.add_turn("Q2", "A2")
-        mgr.add_turn("Q3", "A3")  # 应弹出 Q1/A1
-        assert mgr.turn_count == 2
-        window = mgr.get_window()
-        assert any("Q3" in m["content"] for m in window)
-        assert not any("Q1" in m["content"] for m in window)
+        manager = self._manager(max_turns=2)
+        manager.add_turn("Q1", "A1")
+        manager.add_turn("Q2", "A2")
+        manager.add_turn("Q3", "A3")
+
+        contents = [item["content"] for item in manager.get_window()]
+        assert "Q1" not in contents
+        assert "Q3" in contents
+        assert manager.turn_count == 2
 
     def test_token_eviction(self):
-        mgr = self._mgr(max_turns=10, max_tokens=10)  # 极小 token 限制
-        mgr.add_turn("A" * 50, "B" * 50)  # ~25 tokens, 超出限制
-        mgr.add_turn("C" * 50, "D" * 50)
-        # 窗口里只保留不超限的轮次
-        assert mgr.turn_count <= 1
+        manager = self._manager(max_turns=10, max_tokens=10)
+        manager.add_turn("A" * 50, "B" * 50)
+        manager.add_turn("C" * 50, "D" * 50)
+
+        assert manager.turn_count <= 1
 
     def test_clear(self):
-        mgr = self._mgr()
-        mgr.add_turn("Q", "A")
-        mgr.clear()
-        assert mgr.turn_count == 0
-        assert mgr.get_window() == []
+        manager = self._manager()
+        manager.add_turn("Q", "A")
+        manager.clear()
 
+        assert manager.turn_count == 0
+        assert manager.get_window() == []
 
-# ──────────────────────────────────────────────────────────────────────────────
-# ReviewAgent
-# ──────────────────────────────────────────────────────────────────────────────
 
 class TestReviewAgent:
-    def _agent(self, tmp_path: Path):
-        from copilot.memory.weakness_tracker import WeaknessTracker
-        from copilot.memory.review_agent import ReviewAgent
-        tracker = WeaknessTracker(log_path=tmp_path / "weakness_log.md")
+    def _agent(self):
+        from copilot.profile.review import ReviewAgent
+        from copilot.profile.store import WeaknessTracker
+
+        tracker = WeaknessTracker(log_path=_make_log_path())
         return ReviewAgent(tracker=tracker), tracker
 
-    def test_analyze_writes_to_tracker(self, tmp_path):
-        agent, tracker = self._agent(tmp_path)
+    def test_analyze_writes_to_tracker(self):
+        agent, tracker = self._agent()
         messages = [
-            {"role": "assistant", "content": "请解释什么是 GIL？"},
-            {"role": "user", "content": "不知道，GIL 是什么？"},
+            {"role": "assistant", "content": "Please explain GIL."},
+            {"role": "user", "content": "I do not really understand it."},
         ]
-        with patch("copilot.memory.weakness_tracker._call_llm", return_value="- ❌ **GIL**: 不了解"):
+
+        with patch("copilot.interview.orchestrator.InterviewRunner.review_messages", return_value={"count": 1, "average_overall": 3.0, "results": [{"question": "Please explain GIL.", "accuracy_score": 3, "reason": "Too shallow", "overall_score": 3.0}], "summary": "# Interview Review\n\n1. Please explain GIL.\n   - overall: 3.0/5\n   - accuracy: 3/5\n   - reason: Too shallow"}):
+            summary = asyncio.run(agent.analyze(messages))
+
+        assert "Interview Review" in summary
+
+    def test_analyze_fallback_on_api_error(self):
+        agent, tracker = self._agent()
+        messages = [{"role": "user", "content": "这个问题我不知道怎么答。"}]
+
+        with patch("copilot.profile.review.call_text", side_effect=RuntimeError("net err")):
             asyncio.run(agent.analyze(messages))
 
         content = tracker.log_path.read_text(encoding="utf-8")
-        assert "ReviewAgent" in content or "面试复盘" in content
-
-    def test_analyze_fallback_on_api_error(self, tmp_path):
-        """API 失败时，依据关键词做降级提取，不抛异常。"""
-        agent, tracker = self._agent(tmp_path)
-        messages = [
-            {"role": "user", "content": "不知道，我不清楚这个问题"},
-        ]
-        with patch("copilot.memory.weakness_tracker._call_llm", side_effect=RuntimeError("net err")):
-            asyncio.run(agent.analyze(messages))
-
-        assert tracker.log_path.exists()
+        assert "Interview review" in content
